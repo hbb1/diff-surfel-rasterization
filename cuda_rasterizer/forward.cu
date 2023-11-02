@@ -14,6 +14,7 @@
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 namespace cg = cooperative_groups;
+#define COND_THRES 10000
 
 // Forward method for converting the input spherical harmonics
 // coefficients of each Gaussian to a simple RGB color.
@@ -70,85 +71,134 @@ __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const 
 	return glm::max(result, 0.0f);
 }
 
-// Forward version of 2D covariance matrix computation
-__device__ float3 computeCov2D(const float3& mean, float focal_x, float focal_y, float tan_fovx, float tan_fovy, const float* cov3D, const float* viewmatrix)
-{
-	// The following models the steps outlined by equations 29
-	// and 31 in "EWA Splatting" (Zwicker et al., 2002). 
-	// Additionally considers aspect / scaling of viewport.
-	// Transposes used to account for row-/column-major conventions.
-	float3 t = transformPoint4x3(mean, viewmatrix);
+__device__ bool compute_conics_3d(const float3 & p_world, const float4 &quat, const float3 &scale, const float *viewmat, const float4 &intrins, float *cur_cov3d, float3 & normal) {
+    // camera information 
+    const glm::mat3 W = glm::mat3(
+        viewmat[0],viewmat[1],viewmat[2],
+        viewmat[4],viewmat[5],viewmat[6],
+		viewmat[8],viewmat[9],viewmat[10]
+    ); // viewmat 
 
-	const float limx = 1.3f * tan_fovx;
-	const float limy = 1.3f * tan_fovy;
-	const float txtz = t.x / t.z;
-	const float tytz = t.y / t.z;
-	t.x = min(limx, max(-limx, txtz)) * t.z;
-	t.y = min(limy, max(-limy, tytz)) * t.z;
+    const glm::vec3 px = glm::vec3(p_world.x, p_world.y, p_world.z);            // center
+    const glm::mat3 T = glm::mat3(glm::vec3(0.0f), glm::vec3(0.0f), glm::vec3(viewmat[12], viewmat[13], viewmat[14]));
+    const glm::mat3 P = glm::mat3(
+        intrins.x, 0.0, 0.0, 
+        0.0, intrins.y, 0.0,
+        intrins.z, intrins.w, 1.0
+    );
 
-	glm::mat3 J = glm::mat3(
-		focal_x / t.z, 0.0f, -(focal_x * t.x) / (t.z * t.z),
-		0.0f, focal_y / t.z, -(focal_y * t.y) / (t.z * t.z),
-		0, 0, 0);
+    glm::mat3 R = quat_to_rotmat(quat);
+    glm::mat3 S = scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);                 // scale
+    glm::mat3 M = glm::mat3(R[0], R[1], px);                                    // object local coordinate
+    glm::mat3 M_view = P * (W * M + T) * S;                                     // view space
+    glm::mat3 M_inv = glm::inverse(M_view);
 
-	glm::mat3 W = glm::mat3(
-		viewmatrix[0], viewmatrix[4], viewmatrix[8],
-		viewmatrix[1], viewmatrix[5], viewmatrix[9],
-		viewmatrix[2], viewmatrix[6], viewmatrix[10]);
+    // conditiM on number of M_view
+    glm::mat3 M_un = (W * M + T);
+    glm::mat3 M_un_inv = S * M_inv * P;
+    float norm = glm::dot(M_un[0], M_un[0]) + glm::dot(M_un[1], M_un[1]) + glm::dot(M_un[2], M_un[2]);
+    float norm_inv = glm::dot(M_un_inv[0], M_un_inv[0]) + glm::dot(M_un_inv[1], M_un_inv[1]) + glm::dot(M_un_inv[2], M_un_inv[2]);
+    float cond_num = norm * norm_inv;
+    if (cond_num > COND_THRES) return false;
 
-	glm::mat3 T = W * J;
+    glm::mat3 Qu = glm::mat3(
+        1.0,0.0,0.0,
+        0.0,1.0,0.0,
+        0.0,0.0,-1.0
+    );
 
-	glm::mat3 Vrk = glm::mat3(
-		cov3D[0], cov3D[1], cov3D[2],
-		cov3D[1], cov3D[3], cov3D[4],
-		cov3D[2], cov3D[4], cov3D[5]);
+    glm::mat3 Qx = glm::transpose(M_inv) * Qu * M_inv;
+    cur_cov3d[0] = Qx[0][0]; // A
+    cur_cov3d[1] = Qx[0][1]; // B
+    cur_cov3d[2] = Qx[1][1]; // C
+    cur_cov3d[3] = Qx[0][2]; // D
+    cur_cov3d[4] = Qx[1][2]; // E
+    cur_cov3d[5] = Qx[2][2]; // F
 
-	glm::mat3 cov = glm::transpose(T) * glm::transpose(Vrk) * T;
+    normal = {R[2].x, R[2].y, R[2].z};
 
-	// Apply low-pass filter: every Gaussian should be at least
-	// one pixel wide/high. Discard 3rd row and column.
-	cov[0][0] += 0.3f;
-	cov[1][1] += 0.3f;
-	return { float(cov[0][0]), float(cov[0][1]), float(cov[1][1]) };
+	unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
+	if (idx % == 0) {
+        printf("%d quat %.4f %.4f %.4f %.4f\n", idx, quat.w, quat.x, quat.y,quat.z);
+        printf("%d scale %.4f %.4f %.4f\n", idx, scale.x, scale.y, scale.z);
+		printf("%d camera center %.4f %.4f %.4f\n", idx, viewmat[12], viewmat[13], viewmat[14]);
+        printf("%d W[0] %.4f %.4f %.4f\n", idx, W[0].x, W[0].y, W[0].z);
+        printf("%d W[1] %.4f %.4f %.4f\n", idx, W[1].x, W[1].y, W[1].z);
+        printf("%d W[2] %.4f %.4f %.4f\n", idx, W[2].x, W[2].y, W[2].z);
+        // printf("%d W %.4f %.4f\n", idx, cx, cy);
+        // printf("%d centerx centery %.4f %.4f\n", idx, center.x, center.y);
+        // printf("%d p_world %.4f %.4f %.4f\n", idx, p_world.x, p_world.y,p_world.z);
+        // printf("%d p_view %.4f %.4f %.4f\n", idx, p_view.x, p_view.y, p_view.z);
+        // printf("%d scale %.4f %.4f %.4f\n", idx, scale.x, scale.y, scale.z);
+        // printf("%d quat %.4f %.4f %.4f\n", idx, quat.x, quat.y, quat.z, quat.w);
+        printf("%d tu %.4f %.4f %.4f\n", idx, tu.x, tu.y, tu.z);
+        printf("%d tv %.4f %.4f %.4f\n", idx, tv.x, tv.y, tv.z);
+        printf("%d M_inv[0] %.4f %.4f %.4f\n", idx, M_inv[0].x, M_inv[0].y, M_inv[0].z);
+        printf("%d M_inv[1] %.4f %.4f %.4f\n", idx, M_inv[1].x, M_inv[1].y, M_inv[1].z);    
+        printf("%d M_inv[2] %.4f %.4f %.4f\n", idx, M_inv[2].x, M_inv[2].y, M_inv[2].z);
+        // printf("%d conic %.4f %.4f %.4f\n", idx, conic.x, conic.y, conic.z);
+        printf("%d Q[0] %.4f %.4f %.4f\n", idx, Qx[0].x, Qx[0].y, Qx[0].z);
+        printf("%d Q[1] %.4f %.4f %.4f\n", idx, Qx[1].x, Qx[1].y, Qx[1].z);
+        printf("%d Q[2] %.4f %.4f %.4f\n", idx, Qx[2].x, Qx[2].y, Qx[2].z);
+    }
+
+    return true;
 }
 
-// Forward method for converting scale and rotation properties of each
-// Gaussian to a 3D covariance matrix in world space. Also takes care
-// of quaternion normalization.
-__device__ void computeCov3D(const glm::vec3 scale, float mod, const glm::vec4 rot, float* cov3D)
-{
-	// Create scaling matrix
-	glm::mat3 S = glm::mat3(1.0f);
-	S[0][0] = mod * scale.x;
-	S[1][1] = mod * scale.y;
-	S[2][2] = mod * scale.z;
+__device__ bool compute_conics_2d(const float *cur_cov3d, const float Fg, float3 &conic, float2 &center, float &isoval, float2 &aabb) {
+    float A = cur_cov3d[0]; // A
+    float B = cur_cov3d[1]; // B
+    float C = cur_cov3d[2]; // C
+    float D = cur_cov3d[3]; // D
+    float E = cur_cov3d[4]; // E
+    float F = -cur_cov3d[5]; // F
 
-	// Normalize quaternion to get valid rotation
-	glm::vec4 q = rot;// / glm::length(rot);
-	float r = q.x;
-	float x = q.y;
-	float y = q.z;
-	float z = q.w;
+    const float det = A * C - B * B;
+    if (det == 0.0f) 
+        return false;
+    
+    float inv_det = 1.f / det;
 
-	// Compute rotation matrix from quaternion
-	glm::mat3 R = glm::mat3(
-		1.f - 2.f * (y * y + z * z), 2.f * (x * y - r * z), 2.f * (x * z + r * y),
-		2.f * (x * y + r * z), 1.f - 2.f * (x * x + z * z), 2.f * (y * z - r * x),
-		2.f * (x * z - r * y), 2.f * (y * z + r * x), 1.f - 2.f * (x * x + y * y)
-	);
+    const float cx = (B * E - C * D) * inv_det;
+    const float cy = (B * D - A * E) * inv_det;
+    
+    isoval = (F - D * cx - E * cy);
+    // handle zero isovalue
+    if (isoval <= 0.0f) return false;
 
-	glm::mat3 M = S * R;
+    const float dx = sqrtf(C * isoval * inv_det); // bounding dx
+    const float dy = sqrtf(A * isoval * inv_det); // bounding dy
 
-	// Compute 3D world covariance matrix Sigma
-	glm::mat3 Sigma = glm::transpose(M) * M;
+    if (Fg > 0) { //  normalization the zero level set so that the distance to the center is Fg 
+        float inv_iso = 1.0f / isoval;
+        float inv_norm = Fg * Fg * inv_iso;
+        A = A * inv_norm;
+        B = B * inv_norm;
+        C = C * inv_norm;
+        isoval = Fg * Fg;
+    }
 
-	// Covariance is symmetric, only store upper right
-	cov3D[0] = Sigma[0][0];
-	cov3D[1] = Sigma[0][1];
-	cov3D[2] = Sigma[0][2];
-	cov3D[3] = Sigma[1][1];
-	cov3D[4] = Sigma[1][2];
-	cov3D[5] = Sigma[2][2];
+    aabb = {dx, dy};
+    center = {cx, cy};
+    conic = {A, B, C};
+    return true;
+}
+
+__device__ bool
+compute_conic_bounds(const float3& conic, float3 & cov2d, float&radius) {
+    float inv_det = conic.x * conic.z - conic.y * conic.y;
+    if (inv_det == 0.f)
+        return false;
+    float det = 1.f / inv_det;
+    cov2d.x = conic.z * det;
+    cov2d.y = -conic.y * det;
+    cov2d.z = conic.x * det;
+    float b = 0.5f * (cov2d.x + cov2d.z);
+    float v1 = b + sqrt(max(0.1f, b * b - det));
+    float v2 = b - sqrt(max(0.1f, b * b - det));
+    // take 3 sigma of covariance
+    radius = ceil(3.f * sqrt(max(v1, v2)));
+    return true;
 }
 
 // Perform initial steps for each Gaussian prior to rasterization.
@@ -167,11 +217,13 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	const float* projmatrix,
 	const glm::vec3* cam_pos,
 	const int W, int H,
-	const float tan_fovx, float tan_fovy,
-	const float focal_x, float focal_y,
+	const float tan_fovx, const float tan_fovy,
+	const float focal_x, const float focal_y,
 	int* radii,
 	float2* points_xy_image,
 	float* depths,
+	float* isovals,
+	float3* normals,
 	float* cov3Ds,
 	float* rgb,
 	float4* conic_opacity,
@@ -187,72 +239,56 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	// this Gaussian will not be processed further.
 	radii[idx] = 0;
 	tiles_touched[idx] = 0;
+	
+	float3 p_world = {orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2] };
+	float3 scale = {scales[idx].x, scales[idx].y, scales[idx].z};
+    float4 quat = {rotations[idx].x, rotations[idx].y, rotations[idx].z};
+	float4 intrins = {focal_x, focal_y, float(W)/2.0, float(H)/2.0};
 
 	// Perform near culling, quit if outside.
 	float3 p_view;
 	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, prefiltered, p_view))
 		return;
 
-	// Transform point by projecting
-	float3 p_orig = { orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2] };
-	float4 p_hom = transformPoint4x4(p_orig, projmatrix);
-	float p_w = 1.0f / (p_hom.w + 0.0000001f);
-	float3 p_proj = { p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w };
+	// compute conics 
+    float *cur_cov3d = &(cov3Ds[6 * idx]);
+	
+	bool ok;
+    float3 normal;
+	ok = compute_conics_3d(p_world, quat, scale, viewmatrix, intrins, cur_cov3d, normal);
+	if (!ok) return;
 
-	// If 3D covariance matrix is precomputed, use it, otherwise compute
-	// from scaling and rotation parameters. 
-	const float* cov3D;
-	if (cov3D_precomp != nullptr)
-	{
-		cov3D = cov3D_precomp + idx * 6;
-	}
-	else
-	{
-		computeCov3D(scales[idx], scale_modifier, rotations[idx], cov3Ds + idx * 6);
-		cov3D = cov3Ds + idx * 6;
-	}
+	float3 conic;
+    float2 center;
+    float  isoval;
+    float2 aabb;
+    ok = compute_conics_2d(cur_cov3d, scale.z, conic, center, isoval, aabb);
+    if (!ok) return;
 
-	// Compute 2D screen-space covariance matrix
-	float3 cov = computeCov2D(p_orig, focal_x, focal_y, tan_fovx, tan_fovy, cov3D, viewmatrix);
+	float3 cov2d;
+    float radius;
+    ok = compute_conic_bounds(conic, cov2d, radius);
+	if (!ok) return;
 
-	// Invert covariance (EWA algorithm)
-	float det = (cov.x * cov.z - cov.y * cov.y);
-	if (det == 0.0f)
-		return;
-	float det_inv = 1.f / det;
-	float3 conic = { cov.z * det_inv, -cov.y * det_inv, cov.x * det_inv };
-
-	// Compute extent in screen space (by finding eigenvalues of
-	// 2D covariance matrix). Use extent to compute a bounding rectangle
-	// of screen-space tiles that this Gaussian overlaps with. Quit if
-	// rectangle covers 0 tiles. 
-	float mid = 0.5f * (cov.x + cov.z);
-	float lambda1 = mid + sqrt(max(0.1f, mid * mid - det));
-	float lambda2 = mid - sqrt(max(0.1f, mid * mid - det));
-	float my_radius = ceil(3.f * sqrt(max(lambda1, lambda2)));
-	float2 point_image = { ndc2Pix(p_proj.x, W), ndc2Pix(p_proj.y, H) };
 	uint2 rect_min, rect_max;
-	getRect(point_image, my_radius, rect_min, rect_max, grid);
+	getRect(center, radius, rect_min, rect_max, grid);
 	if ((rect_max.x - rect_min.x) * (rect_max.y - rect_min.y) == 0)
 		return;
 
-	// If colors have been precomputed, use them, otherwise convert
-	// spherical harmonics coefficients to RGB color.
-	if (colors_precomp == nullptr)
-	{
-		glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
-		rgb[idx * C + 0] = result.x;
-		rgb[idx * C + 1] = result.y;
-		rgb[idx * C + 2] = result.z;
-	}
+	// compute colors 
+	glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
+	rgb[idx * C + 0] = result.x;
+	rgb[idx * C + 1] = result.y;
+	rgb[idx * C + 2] = result.z;
 
-	// Store some useful helper data for the next steps.
+	// assign values
 	depths[idx] = p_view.z;
-	radii[idx] = my_radius;
-	points_xy_image[idx] = point_image;
-	// Inverse 2D covariance and opacity neatly pack into one float4
+	radii[idx] = (int)radius;
+	points_xy_image[idx] = center;
 	conic_opacity[idx] = { conic.x, conic.y, conic.z, opacities[idx] };
 	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
+	isovals[idx] = isoval;
+	normals[idx] = normal;
 }
 
 // Main rasterization method. Collaboratively works on one tile per
@@ -421,12 +457,17 @@ void FORWARD::preprocess(int P, int D, int M,
 	const float* viewmatrix,
 	const float* projmatrix,
 	const glm::vec3* cam_pos,
-	const int W, int H,
-	const float focal_x, float focal_y,
-	const float tan_fovx, float tan_fovy,
+	const int W, 
+	const int H,
+	const float focal_x, 
+	const float focal_y,
+	const float tan_fovx, 
+	const float tan_fovy,
 	int* radii,
 	float2* means2D,
 	float* depths,
+	float* isovals,
+	float3* normals,
 	float* cov3Ds,
 	float* rgb,
 	float4* conic_opacity,
@@ -454,6 +495,8 @@ void FORWARD::preprocess(int P, int D, int M,
 		radii,
 		means2D,
 		depths,
+		isovals,
+		normals,
 		cov3Ds,
 		rgb,
 		conic_opacity,

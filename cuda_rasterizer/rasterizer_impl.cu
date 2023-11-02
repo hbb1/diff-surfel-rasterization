@@ -156,12 +156,14 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& ch
 {
 	GeometryState geom;
 	obtain(chunk, geom.depths, P, 128);
-	obtain(chunk, geom.clamped, P * 3, 128);
+	obtain(chunk, geom.isovals, P, 128);
+	obtain(chunk, geom.normals, P, 128);
+	obtain(chunk, geom.clamped, P, 128);
 	obtain(chunk, geom.internal_radii, P, 128);
 	obtain(chunk, geom.means2D, P, 128);
 	obtain(chunk, geom.cov3D, P * 6, 128);
 	obtain(chunk, geom.conic_opacity, P, 128);
-	obtain(chunk, geom.rgb, P * 3, 128);
+	obtain(chunk, geom.rgb, P, 128);
 	obtain(chunk, geom.tiles_touched, P, 128);
 	cub::DeviceScan::InclusiveSum(nullptr, geom.scan_size, geom.tiles_touched, geom.tiles_touched, P);
 	obtain(chunk, geom.scanning_space, geom.scan_size, 128);
@@ -257,14 +259,20 @@ int CudaRasterizer::Rasterizer::forward(
 		geomState.clamped,
 		cov3D_precomp,
 		colors_precomp,
-		viewmatrix, projmatrix,
+		viewmatrix, 
+		projmatrix,
 		(glm::vec3*)cam_pos,
-		width, height,
-		focal_x, focal_y,
-		tan_fovx, tan_fovy,
+		width, 
+		height,
+		focal_x, 
+		focal_y,
+		tan_fovx, 
+		tan_fovy,
 		radii,
 		geomState.means2D,
 		geomState.depths,
+		geomState.isovals,
+		geomState.normals,
 		geomState.cov3D,
 		geomState.rgb,
 		geomState.conic_opacity,
@@ -415,27 +423,50 @@ void CudaRasterizer::Rasterizer::backward(
 	// Take care of the rest of preprocessing. Was the precomputed covariance
 	// given to us or a scales/rot pair? If precomputed, pass that. If not,
 	// use the one we computed ourselves.
+
+	float* dL_disoval;
+	CHECK_CUDA(cudaMalloc((void**) &dL_disoval, P * sizeof(float)), debug);
+	CHECK_CUDA(cudaMemset(dL_disoval, 0, P * sizeof(float)), debug);
+
+	float* dL_ddepth;
+	CHECK_CUDA(cudaMalloc((void**) &dL_ddepth, P * sizeof(float)), debug);
+	CHECK_CUDA(cudaMemset(dL_ddepth, 0, P * sizeof(float)), debug);
+
+	float3* dL_dnormal;
+	CHECK_CUDA(cudaMalloc((void**) &dL_dnormal, P * sizeof(float3)), debug);
+	CHECK_CUDA(cudaMemset(dL_dnormal, 0, P * sizeof(float3)), debug);
+
 	const float* cov3D_ptr = (cov3D_precomp != nullptr) ? cov3D_precomp : geomState.cov3D;
 	CHECK_CUDA(BACKWARD::preprocess(P, D, M,
 		(float3*)means3D,
 		radii,
 		shs,
 		geomState.clamped,
-		(glm::vec3*)scales,
-		(glm::vec4*)rotations,
+		(float3*)scales,
+		(float4*)rotations,
 		scale_modifier,
 		cov3D_ptr,
-		viewmatrix,
-		projmatrix,
+		// cameras
+		viewmatrix, projmatrix,
+		width, height,
 		focal_x, focal_y,
 		tan_fovx, tan_fovy,
 		(glm::vec3*)campos,
+		// grad inputs
 		(float3*)dL_dmean2D,
-		dL_dconic,
-		(glm::vec3*)dL_dmean3D,
+		(float4*)dL_dconic,
+		dL_ddepth,
+		dL_disoval,
+		(float3*)dL_dnormal,
+		// grad outputs
+		(float3*)dL_dmean3D,
 		dL_dcolor,
 		dL_dcov3D,
 		dL_dsh,
-		(glm::vec3*)dL_dscale,
-		(glm::vec4*)dL_drot), debug)
+		(float3*)dL_dscale,
+		(float4*)dL_drot), debug)
+
+	cudaFree(dL_disoval);
+	cudaFree(dL_ddepth);
+	cudaFree(dL_dnormal);
 }

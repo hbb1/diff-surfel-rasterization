@@ -1,0 +1,13 @@
+{
+    "files.associations": {
+        "*.cu": "cpp",
+        "*.cuh": "cpp",
+        "limits": "cpp",
+        "*.ipp": "cpp",
+        "complex": "cpp",
+        "algorithm": "cpp",
+        "chrono": "cpp",
+        "random": "cpp"
+    },
+    "cmake.configureOnOpen": false
+}

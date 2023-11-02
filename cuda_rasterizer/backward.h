@@ -40,28 +40,35 @@ namespace BACKWARD
 		float* dL_dcolors);
 
 	void preprocess(
+		// geometry primitives
 		int P, int D, int M,
-		const float3* means,
+		const float3* mean3Ds,
 		const int* radii,
 		const float* shs,
 		const bool* clamped,
-		const glm::vec3* scales,
-		const glm::vec4* rotations,
+		const float3* scales,
+		const float4* rotations,
 		const float scale_modifier,
 		const float* cov3Ds,
-		const float* view,
-		const float* proj,
+		// cameras
+		const float* viewmatrix, const float* projmatrix,
+		const int width, const int height,
 		const float focal_x, float focal_y,
 		const float tan_fovx, float tan_fovy,
 		const glm::vec3* campos,
+		// grad inputs
 		const float3* dL_dmean2D,
-		const float* dL_dconics,
-		glm::vec3* dL_dmeans,
+		const float4* dL_dconic,
+		const float * dL_ddepth,
+		const float* dL_disoval,
+		const float3* dL_dnormal,
+		// outputs
+		float3* dL_dmean3D,
 		float* dL_dcolor,
 		float* dL_dcov3D,
 		float* dL_dsh,
-		glm::vec3* dL_dscale,
-		glm::vec4* dL_drot);
+		float3* dL_dscale,
+		float4* dL_drot);
 }
 
 #endif
