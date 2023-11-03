@@ -117,8 +117,9 @@ __device__ bool computeConic3D(const float3 & p_world, const float4 &quat, const
 
     normal = {R[2].x, R[2].y, R[2].z};
 
-	unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
-	if (idx == 0) {
+    return true;
+	// unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
+	// if (idx == 0) {
         // printf("%d quat %.4f %.4f %.4f %.4f\n", idx, quat.w, quat.x, quat.y,quat.z);
         // printf("%d scale %.4f %.4f %.4f\n", idx, scale.x, scale.y, scale.z);
 		// printf("%d camera center %.4f %.4f %.4f\n", idx, viewmat[12], viewmat[13], viewmat[14]);
@@ -127,9 +128,8 @@ __device__ bool computeConic3D(const float3 & p_world, const float4 &quat, const
         // printf("%d W[2] %.4f %.4f %.4f\n", idx, W[2].x, W[2].y, W[2].z);
         // printf("%d center %.4f %.4f\n", idx, center.x, center.y);
 		// printf("%d conic %.4f %.4f %.4f\n", idx, conic.x, conic.y, conic.z);
-		printf("%d cur_cov3d %.4f %.4f %.4f %.4f %.4f %.4f\n", idx, cur_cov3d[0], cur_cov3d[1], cur_cov3d[2], cur_cov3d[3], cur_cov3d[4], cur_cov3d[5]);
-	}
-    return true;
+		// printf("%d cur_cov3d %.4f %.4f %.4f %.4f %.4f %.4f\n", idx, cur_cov3d[0], cur_cov3d[1], cur_cov3d[2], cur_cov3d[3], cur_cov3d[4], cur_cov3d[5]);
+	// }
 }
 
 __device__ bool computeConic2D(const float *cur_cov3d, float3 &conic, float2 &center, float2 &aabb) {
@@ -258,10 +258,12 @@ __global__ void preprocessCUDA(int P, int D, int M,
 		return;
 
 	// compute colors 
-	glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
-	rgb[idx * C + 0] = result.x;
-	rgb[idx * C + 1] = result.y;
-	rgb[idx * C + 2] = result.z;
+	if (colors_precomp == nullptr) {
+		glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
+		rgb[idx * C + 0] = result.x;
+		rgb[idx * C + 1] = result.y;
+		rgb[idx * C + 2] = result.z;
+	}
 
 	// assign values
 	depths[idx] = p_view.z;
@@ -270,19 +272,19 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	conic_opacity[idx] = {conic.x, conic.y, conic.z, opacities[idx]};
 	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
 
-	if (idx == 0) {
+	// if (idx == 0) {
         // printf("%d quat %.4f %.4f %.4f %.4f\n", idx, quat.w, quat.x, quat.y,quat.z);
         // printf("%d scale %.4f %.4f %.4f\n", idx, scale.x, scale.y, scale.z);
 		// printf("%d camera center %.4f %.4f %.4f\n", idx, viewmat[12], viewmat[13], viewmat[14]);
         // printf("%d W[0] %.4f %.4f %.4f\n", idx, W[0].x, W[0].y, W[0].z);
         // printf("%d W[1] %.4f %.4f %.4f\n", idx, W[1].x, W[1].y, W[1].z);
         // printf("%d W[2] %.4f %.4f %.4f\n", idx, W[2].x, W[2].y, W[2].z);
-        printf("%d center %.4f %.4f\n", idx, center.x, center.y);
-		printf("%d conic %.4f %.4f %.4f\n", idx, conic.x, conic.y, conic.z);
+        // printf("%d center %.4f %.4f\n", idx, center.x, center.y);
+		// printf("%d conic %.4f %.4f %.4f\n", idx, conic.x, conic.y, conic.z);
 		// printf("%d isoval %.4f \n", idx, isoval);
         // printf("%d centerx centery %.4f %.4f\n", idx, center.x, center.y);
         // printf("%d p_world %.4f %.4f %.4f\n", idx, p_world.x, p_world.y,p_world.z);
-        printf("%d p_view %.4f %.4f %.4f\n", idx, p_view.x, p_view.y, p_view.z);
+        // printf("%d p_view %.4f %.4f %.4f\n", idx, p_view.x, p_view.y, p_view.z);
         // printf("%d scale %.4f %.4f %.4f\n", idx, scale.x, scale.y, scale.z);
         // printf("%d quat %.4f %.4f %.4f\n", idx, quat.x, quat.y, quat.z, quat.w);
         // printf("%d R[0] %.4f %.4f %.4f\n", idx, R[0].x, R[0].y, R[0].z);
@@ -294,7 +296,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
         // printf("%d Q[0] %.4f %.4f %.4f\n", idx, Qx[0].x, Qx[0].y, Qx[0].z);
         // printf("%d Q[1] %.4f %.4f %.4f\n", idx, Qx[1].x, Qx[1].y, Qx[1].z);
         // printf("%d Q[2] %.4f %.4f %.4f\n", idx, Qx[2].x, Qx[2].y, Qx[2].z);
-    }
+    // }
 	// isovals[idx] = isoval;
 	// normals[idx] = normal;
 }

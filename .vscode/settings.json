@@ -8,7 +8,9 @@
         "algorithm": "cpp",
         "chrono": "cpp",
         "random": "cpp",
-        "tuple": "cpp"
+        "tuple": "cpp",
+        "strstream": "cpp",
+        "functional": "cpp"
     },
     "cmake.configureOnOpen": false
 }

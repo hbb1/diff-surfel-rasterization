@@ -576,16 +576,17 @@ __global__ void computeConic2D(int P,
     const float * cov3Ds,
     const float * dL_dconics,
     const float3 * dL_dmean2Ds,
-    float *dL_dcov3Ds)
+    float *dL_dcov3Ds,
+	float2 mean2D_scaler)
 {
 	auto idx = cg::this_grid().thread_rank();
 	if (idx >= P || !(radii[idx] > 0))
 		return;
 	
-	// const float3 dL_dconic = {dL_dconics[4 * idx], dL_dconics[4 * idx + 1], dL_dconics[4 * idx + 3]};
-	// const float2 dL_dcenter = {dL_dmean2D[0].x, dL_dmean2D[0].y};
-	const float3 dL_dconic = {1.0f, 1.0f, 1.0f};
-	const float2 dL_dcenter = {1.0f, 1.0f};
+	const float3 dL_dconic = {dL_dconics[4 * idx], dL_dconics[4 * idx + 1], dL_dconics[4 * idx + 3]};
+	const float2 dL_dcenter = {dL_dmean2Ds[idx].x * mean2D_scaler.x, dL_dmean2Ds[idx].y * mean2D_scaler.y};
+	// const float3 dL_dconic = {1.0f, 1.0f, 1.0f};
+	// const float2 dL_dcenter = {1.0f, 1.0f};
 
 	const float* cov3D = cov3Ds + 6 * idx;
 	const float A = cov3D[0]; 	// A
@@ -640,14 +641,13 @@ __global__ void computeConic2D(int P,
     dL_dcov3Ds[6 * idx + 4] = dL_diso * diso_de + dL_dcenter.x * dcx_de + dL_dcenter.y * dcy_de;
     dL_dcov3Ds[6 * idx + 5] = -dL_diso * diso_df;
 
-	if (idx == 0) {
-		printf("%d cov3D %.4f %.4f %.4f %.4f %.4f %.4f\n", idx, cov3D[0], cov3D[1], cov3D[2], cov3D[3], cov3D[4], cov3D[5]);
-		printf("%d dL_dcov %.4f %.4f %.4f %.4f %.4f %.4f\n", idx, dL_dcov3Ds[0], dL_dcov3Ds[1], dL_dcov3Ds[2], dL_dcov3Ds[3], dL_dcov3Ds[4], dL_dcov3Ds[5]);
-		printf("%d dL_dconics %.4f %.4f %.4f %.4f %.4f %.4f\n", idx, dL_dcov3Ds[0], dL_dcov3Ds[1], dL_dcov3Ds[2], dL_dcov3Ds[3], dL_dcov3Ds[4], dL_dcov3Ds[5]);
-		printf("%d dL_dcenter %.4f %.4f %.4f %.4f %.4f %.4f\n", idx, dL_dcov3Ds[0], dL_dcov3Ds[1], dL_dcov3Ds[2], dL_dcov3Ds[3], dL_dcov3Ds[4], dL_dcov3Ds[5]);
-	}
+	// if (idx == 0) {
+	// 	printf("%d cov3D %.4f %.4f %.4f %.4f %.4f %.4f\n", idx, cov3D[0], cov3D[1], cov3D[2], cov3D[3], cov3D[4], cov3D[5]);
+	// 	printf("%d dL_dcov %.4f %.4f %.4f %.4f %.4f %.4f\n", idx, dL_dcov3Ds[0], dL_dcov3Ds[1], dL_dcov3Ds[2], dL_dcov3Ds[3], dL_dcov3Ds[4], dL_dcov3Ds[5]);
+	// 	printf("%d dL_dconics %.4f %.4f %.4f %.4f %.4f %.4f\n", idx, dL_dcov3Ds[0], dL_dcov3Ds[1], dL_dcov3Ds[2], dL_dcov3Ds[3], dL_dcov3Ds[4], dL_dcov3Ds[5]);
+	// 	printf("%d dL_dcenter %.4f %.4f %.4f %.4f %.4f %.4f\n", idx, dL_dcov3Ds[0], dL_dcov3Ds[1], dL_dcov3Ds[2], dL_dcov3Ds[3], dL_dcov3Ds[4], dL_dcov3Ds[5]);
+	// }
 }
-
 
 inline __device__ void computeConic3D(
     const glm::vec3 & p_world,
@@ -720,16 +720,16 @@ inline __device__ void computeConic3D(
         0.0f
     );
 
-    unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
-    if (idx == 0) {
-        printf("dL_dQ %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dQ[0].x, dL_dQ[0].y, dL_dQ[0].z, dL_dQ[1].x, dL_dQ[1].y, dL_dQ[1].z, dL_dQ[2].x, dL_dQ[2].y, dL_dQ[2].z);
-        printf("dL_dM_inv %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dM_inv[0].x, dL_dM_inv[0].y, dL_dM_inv[0].z, dL_dM_inv[1].x, dL_dM_inv[1].y, dL_dM_inv[1].z, dL_dM_inv[2].x, dL_dM_inv[2].y, dL_dM_inv[2].z);
-        printf("M_inv %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, M_inv[0].x, M_inv[0].y, M_inv[0].z, M_inv[1].x, M_inv[1].y, M_inv[1].z, M_inv[2].x, M_inv[2].y, M_inv[2].z);
-        printf("dL_dM %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dM[0].x, dL_dM[0].y, dL_dM[0].z, dL_dM[1].x, dL_dM[1].y, dL_dM[1].z, dL_dM[2].x, dL_dM[2].y, dL_dM[2].z);
-        printf("dL_dR %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dR[0].x, dL_dR[0].y, dL_dR[0].z, dL_dR[1].x, dL_dR[1].y, dL_dR[1].z, dL_dR[2].x, dL_dR[2].y, dL_dR[2].z);
-		printf("dL_dscale %d [%.8f, %.8f, %.8f]\n", idx, dL_dscale.x, dL_dscale.y, dL_dscale.z);
-		printf("dL_dmean3d %d [%.8f, %.8f, %.8f]\n", idx, dL_dmean3D.x, dL_dmean3D.y, dL_dmean3D.z);
-    }
+    // unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
+    // if (idx == 0) {
+        // printf("dL_dQ %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dQ[0].x, dL_dQ[0].y, dL_dQ[0].z, dL_dQ[1].x, dL_dQ[1].y, dL_dQ[1].z, dL_dQ[2].x, dL_dQ[2].y, dL_dQ[2].z);
+        // printf("dL_dM_inv %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dM_inv[0].x, dL_dM_inv[0].y, dL_dM_inv[0].z, dL_dM_inv[1].x, dL_dM_inv[1].y, dL_dM_inv[1].z, dL_dM_inv[2].x, dL_dM_inv[2].y, dL_dM_inv[2].z);
+        // printf("M_inv %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, M_inv[0].x, M_inv[0].y, M_inv[0].z, M_inv[1].x, M_inv[1].y, M_inv[1].z, M_inv[2].x, M_inv[2].y, M_inv[2].z);
+        // printf("dL_dM %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dM[0].x, dL_dM[0].y, dL_dM[0].z, dL_dM[1].x, dL_dM[1].y, dL_dM[1].z, dL_dM[2].x, dL_dM[2].y, dL_dM[2].z);
+        // printf("dL_dR %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dR[0].x, dL_dR[0].y, dL_dR[0].z, dL_dR[1].x, dL_dR[1].y, dL_dR[1].z, dL_dR[2].x, dL_dR[2].y, dL_dR[2].z);
+		// printf("dL_dscale %d [%.8f, %.8f, %.8f]\n", idx, dL_dscale.x, dL_dscale.y, dL_dscale.z);
+		// printf("dL_dmean3d %d [%.8f, %.8f, %.8f]\n", idx, dL_dmean3D.x, dL_dmean3D.y, dL_dmean3D.z);
+    // }
 }
 
 
@@ -791,16 +791,18 @@ __global__ void preprocessCUDA(
 	dL_dscales[idx] = dL_dscale;
 	dL_drots[idx] = dL_drot;
 
-	if (idx == 0) {
-		printf("before compute gradient w.r.t sh");
-		printf("dL_dscale %d [%.8f, %.8f, %.8f]\n", idx, dL_dscale.x, dL_dscale.y, dL_dscale.z);
-		printf("dL_dmean3d %d [%.8f, %.8f, %.8f]\n", idx, dL_dmean3D.x, dL_dmean3D.y, dL_dmean3D.z);
-		printf("dL_drot %d [%.8f, %.8f, %.8f, %.8f]\n", idx, dL_drot.x, dL_drot.y, dL_drot.z, dL_drot.w);
-		printf("intrins %d [%.8f, %.8f, %.8f, %.8f]\n", idx, intrins.x, intrins.y, intrins.z, intrins.w);
-	}
+	// if (idx % 32 == 0)  {
+	// 	printf("dL_dscale %d [%.8f, %.8f, %.8f]\n", idx, dL_dscale.x, dL_dscale.y, dL_dscale.z);
+	// 	printf("dL_dmean3d %d [%.8f, %.8f, %.8f]\n", idx, dL_dmean3D.x, dL_dmean3D.y, dL_dmean3D.z);
+	// 	printf("dL_drot %d [%.8f, %.8f, %.8f, %.8f]\n", idx, dL_drot.x, dL_drot.y, dL_drot.z, dL_drot.w);
+	// }
 
 	if (shs)
 		computeColorFromSH(idx, D, M, (glm::vec3*)means3D, *campos, shs, clamped, (glm::vec3*)dL_dcolors, (glm::vec3*)dL_dmean3Ds, (glm::vec3*)dL_dshs);
+
+	// if (idx % 32 == 0)  {
+	// 	printf("after sh dL_dmean3d %d [%.8f, %.8f, %.8f]\n", idx, dL_dmean3D.x, dL_dmean3D.y, dL_dmean3D.z);
+	// }
 }
 
 
@@ -834,14 +836,17 @@ void BACKWARD::preprocess(
 	// "preprocess". When done, loss gradient w.r.t. 3D means has been
 	// modified and gradient w.r.t. 3D covariance matrix has been computed.	
 	// propagate gradients to cov3D
+	
+	float2 mean2D_scaler = {0.5 / focal_x * tan_fovx, 0.5 / focal_y * tan_fovy};
+
 	computeConic2D << <(P + 255) / 256, 256 >> >(
 		P, 
 		radii,
     	cov3Ds,
     	dL_dconics,
     	dL_dmean2Ds,
-    	dL_dcov3Ds);
-	// output dL_dcov3D for next
+    	dL_dcov3Ds,
+		mean2D_scaler);
 
 	// propagate gradients from cov3d to mean3d, scale, rot, sh, color
 	preprocessCUDA<NUM_CHANNELS><< <(P + 255) / 256, 256 >> > (
