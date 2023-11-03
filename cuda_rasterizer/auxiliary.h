@@ -164,16 +164,7 @@ __forceinline__ __device__ bool in_frustum(int idx,
 }
 
 
-__forceinline__ __device__ glm::mat3
-scale_to_mat(const float3 scale, const float glob_scale) {
-    glm::mat3 S = glm::mat3(1.f);
-    S[0][0] = glob_scale * scale.x;
-    S[1][1] = glob_scale * scale.y;
-    S[2][2] = glob_scale * scale.z;
-    return S;
-}
-
-__forceinline__ __device__ glm::mat3 quat_to_rotmat(const float4 quat) {
+inline __device__ glm::mat3 quat_to_rotmat(const glm::vec4 quat) {
     // quat to rotation matrix
     float s = rsqrtf(
         quat.w * quat.w + quat.x * quat.x + quat.y * quat.y + quat.z * quat.z
@@ -198,8 +189,8 @@ __forceinline__ __device__ glm::mat3 quat_to_rotmat(const float4 quat) {
 }
 
 
-__forceinline__ __device__ float4
-quat_to_rotmat_vjp(const float4 quat, const glm::mat3 v_R) {
+inline __device__ glm::vec4
+quat_to_rotmat_vjp(const glm::vec4 quat, const glm::mat3 v_R) {
     float s = rsqrtf(
         quat.w * quat.w + quat.x * quat.x + quat.y * quat.y + quat.z * quat.z
     );
@@ -208,7 +199,7 @@ quat_to_rotmat_vjp(const float4 quat, const glm::mat3 v_R) {
     float y = quat.z * s;
     float z = quat.w * s;
 
-    float4 v_quat;
+    glm::vec4 v_quat;
     // v_R is COLUMN MAJOR
     // w element stored in x field
     v_quat.x =
@@ -245,9 +236,14 @@ quat_to_rotmat_vjp(const float4 quat, const glm::mat3 v_R) {
 }
 
 
-
-
-
+inline __device__ glm::mat3
+scale_to_mat(const float3 scale, const float glob_scale) {
+    glm::mat3 S = glm::mat3(1.f);
+    S[0][0] = glob_scale * scale.x;
+    S[1][1] = glob_scale * scale.y;
+    S[2][2] = glob_scale * scale.z;
+    return S;
+}
 
 
 
