@@ -248,6 +248,9 @@ __global__ void preprocessCUDA(int P, int D, int M,
     ok = compute_conic_bounds(conic, cov2d, radius);
 	if (!ok) return;
 
+	// add the bounding of countour
+	radius = radius + max(aabb.x, aabb.y);
+
 	uint2 rect_min, rect_max;
 	getRect(center, radius, rect_min, rect_max, grid);
 	if ((rect_max.x - rect_min.x) * (rect_max.y - rect_min.y) == 0)
