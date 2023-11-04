@@ -71,7 +71,7 @@ __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const 
 	return glm::max(result, 0.0f);
 }
 
-__device__ bool computeConic3D(const float3 & p_world, const float4 &quat, const float3 &scale, const float *viewmat, const float4 &intrins, float *cur_cov3d, float3 & normal) {
+__device__ bool computeConic3D(const glm::vec3 &p_world, const glm::vec4 &quat, const glm::vec3 &scale, const float *viewmat, const float4 &intrins, float *cur_cov3d, glm::vec3 & normal) {
     // camera information 
     const glm::mat3 W = glm::mat3(
         viewmat[0],viewmat[1],viewmat[2],
@@ -117,19 +117,16 @@ __device__ bool computeConic3D(const float3 & p_world, const float4 &quat, const
 
     normal = {R[2].x, R[2].y, R[2].z};
 
-    return true;
 	// unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
-	// if (idx == 0) {
-        // printf("%d quat %.4f %.4f %.4f %.4f\n", idx, quat.w, quat.x, quat.y,quat.z);
-        // printf("%d scale %.4f %.4f %.4f\n", idx, scale.x, scale.y, scale.z);
-		// printf("%d camera center %.4f %.4f %.4f\n", idx, viewmat[12], viewmat[13], viewmat[14]);
-        // printf("%d W[0] %.4f %.4f %.4f\n", idx, W[0].x, W[0].y, W[0].z);
-        // printf("%d W[1] %.4f %.4f %.4f\n", idx, W[1].x, W[1].y, W[1].z);
-        // printf("%d W[2] %.4f %.4f %.4f\n", idx, W[2].x, W[2].y, W[2].z);
-        // printf("%d center %.4f %.4f\n", idx, center.x, center.y);
-		// printf("%d conic %.4f %.4f %.4f\n", idx, conic.x, conic.y, conic.z);
-		// printf("%d cur_cov3d %.4f %.4f %.4f %.4f %.4f %.4f\n", idx, cur_cov3d[0], cur_cov3d[1], cur_cov3d[2], cur_cov3d[3], cur_cov3d[4], cur_cov3d[5]);
+	// if (idx % 32 == 0) {
+    //     printf("%d quat %.4f %.4f %.4f %.4f\n", idx, quat.x, quat.y, quat.z,quat.w);
+    //     printf("%d scale %.4f %.4f %.4f\n", idx, scale.x, scale.y, scale.z);
+	// 	// printf("%d camera center %.4f %.4f %.4f\n", idx, viewmat[12], viewmat[13], viewmat[14]);
+    //     printf("%d R[0] %.4f %.4f %.4f\n", idx, R[0].x, R[0].y, R[0].z);
+    //     printf("%d R[1] %.4f %.4f %.4f\n", idx, R[1].x, R[1].y, R[1].z);
+    //     printf("%d R[2] %.4f %.4f %.4f\n", idx, R[2].x, R[2].y, R[2].z);
 	// }
+    return true;
 }
 
 __device__ bool computeConic2D(const float *cur_cov3d, float3 &conic, float2 &center, float2 &aabb) {
@@ -223,11 +220,10 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	radii[idx] = 0;
 	tiles_touched[idx] = 0;
 	
-	float3 p_world = {orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2] };
-	float3 scale = {scales[idx].x, scales[idx].y, scales[idx].z};
-    float4 quat = {rotations[idx].x, rotations[idx].y, rotations[idx].z};
 	float4 intrins = {focal_x, focal_y, float(W)/2.0, float(H)/2.0};
-
+	glm::vec3 p_world = glm::vec3(orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2]);
+	glm::vec3 scale = scales[idx];
+	glm::vec4 quat = rotations[idx];
 	// Perform near culling, quit if outside.
 	float3 p_view;
 	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, prefiltered, p_view))
@@ -237,7 +233,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
     float *cur_cov3d = &(cov3Ds[6 * idx]);
 	
 	bool ok;
-    float3 normal;
+    glm::vec3 normal;
 	ok = computeConic3D(p_world, quat, scale, viewmatrix, intrins, cur_cov3d, normal);
 	if (!ok) return;
 
@@ -272,14 +268,14 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	conic_opacity[idx] = {conic.x, conic.y, conic.z, opacities[idx]};
 	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
 
-	// if (idx == 0) {
-        // printf("%d quat %.4f %.4f %.4f %.4f\n", idx, quat.w, quat.x, quat.y,quat.z);
-        // printf("%d scale %.4f %.4f %.4f\n", idx, scale.x, scale.y, scale.z);
-		// printf("%d camera center %.4f %.4f %.4f\n", idx, viewmat[12], viewmat[13], viewmat[14]);
+	// if (idx % 32 == 0) {
+    //     printf("%d center %.4f %.4f depth %.4f\n", idx, center.x, center.y, p_view.z);
+    //     printf("%d normal %.4f %.4f %.4f\n", idx, normal.x, normal.y, normal.z);
+	// 	printf("%d conic %.4f %.4f %.4f\n", idx, conic.x, conic.y, conic.z);
+	// }
         // printf("%d W[0] %.4f %.4f %.4f\n", idx, W[0].x, W[0].y, W[0].z);
         // printf("%d W[1] %.4f %.4f %.4f\n", idx, W[1].x, W[1].y, W[1].z);
         // printf("%d W[2] %.4f %.4f %.4f\n", idx, W[2].x, W[2].y, W[2].z);
-        // printf("%d center %.4f %.4f\n", idx, center.x, center.y);
 		// printf("%d conic %.4f %.4f %.4f\n", idx, conic.x, conic.y, conic.z);
 		// printf("%d isoval %.4f \n", idx, isoval);
         // printf("%d centerx centery %.4f %.4f\n", idx, center.x, center.y);

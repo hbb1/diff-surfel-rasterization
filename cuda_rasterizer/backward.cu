@@ -644,8 +644,8 @@ __global__ void computeConic2D(int P,
 	// if (idx == 0) {
 	// 	printf("%d cov3D %.4f %.4f %.4f %.4f %.4f %.4f\n", idx, cov3D[0], cov3D[1], cov3D[2], cov3D[3], cov3D[4], cov3D[5]);
 	// 	printf("%d dL_dcov %.4f %.4f %.4f %.4f %.4f %.4f\n", idx, dL_dcov3Ds[0], dL_dcov3Ds[1], dL_dcov3Ds[2], dL_dcov3Ds[3], dL_dcov3Ds[4], dL_dcov3Ds[5]);
-	// 	printf("%d dL_dconics %.4f %.4f %.4f %.4f %.4f %.4f\n", idx, dL_dcov3Ds[0], dL_dcov3Ds[1], dL_dcov3Ds[2], dL_dcov3Ds[3], dL_dcov3Ds[4], dL_dcov3Ds[5]);
-	// 	printf("%d dL_dcenter %.4f %.4f %.4f %.4f %.4f %.4f\n", idx, dL_dcov3Ds[0], dL_dcov3Ds[1], dL_dcov3Ds[2], dL_dcov3Ds[3], dL_dcov3Ds[4], dL_dcov3Ds[5]);
+	// 	printf("%d dL_dconics [%.8f,%.8f,%.8f]\n", idx, dL_dconic.x, dL_dconic.y, dL_dconic.z);
+	// 	printf("%d dL_dcenter [%.8f,%.8f]\n", idx, dL_dcenter.x, dL_dcenter.y);
 	// }
 }
 
