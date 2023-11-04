@@ -837,7 +837,7 @@ void BACKWARD::preprocess(
 	// modified and gradient w.r.t. 3D covariance matrix has been computed.	
 	// propagate gradients to cov3D
 	
-	float2 mean2D_scaler = {0.5 / focal_x * tan_fovx, 0.5 / focal_y * tan_fovy};
+	float2 mean2D_scaler = {2.0f / (focal_x * tan_fovx), 2.0f / (focal_y * tan_fovy)};
 
 	computeConic2D << <(P + 255) / 256, 256 >> >(
 		P, 
