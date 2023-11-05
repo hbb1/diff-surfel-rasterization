@@ -14,7 +14,6 @@
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 namespace cg = cooperative_groups;
-#define COND_THRES 10000
 
 // Forward method for converting the input spherical harmonics
 // coefficients of each Gaussian to a simple RGB color.
@@ -90,7 +89,7 @@ __device__ bool computeConic3D(const glm::vec3 &p_world, const glm::vec4 &quat, 
     glm::mat3 R = quat_to_rotmat(glm::vec4(quat.x, quat.y, quat.z, quat.w));
     glm::mat3 S = scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);                 // scale
     glm::mat3 M = glm::mat3(R[0], R[1], px);                                    // object local coordinate
-    glm::mat3 M_view = P * (W * M + T) * S;                                     // view space
+    glm::dmat3 M_view = P * (W * M + T) * S;                                     // view space
     glm::mat3 M_inv = glm::inverse(M_view);
 
     // conditiM on number of M_view
