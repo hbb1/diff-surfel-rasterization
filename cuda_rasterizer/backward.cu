@@ -651,7 +651,7 @@ __global__ void computeConic2D(int P,
 
 inline __device__ void computeConic3D(
     const glm::vec3 & p_world,
-    const glm::vec4 & rotation,
+    const glm::vec4 & quat,
     const glm::vec3 & scale,
     const float* viewmat,
     const float4 & intrins,
@@ -675,11 +675,16 @@ inline __device__ void computeConic3D(
         intrins.z, intrins.w, 1.0
     );
 
-    glm::mat3 R = quat_to_rotmat(rotation);
-    glm::mat3 S = scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);         // scale
-    glm::mat3 M = glm::mat3(R[0], R[1], px);                            // object local coordinate
-    glm::mat3 M_view = P * (W * M + T) * S;                             // view space
-    glm::mat3 M_inv = glm::inverse(M_view);
+    glm::mat3 R = quat_to_rotmat(quat);
+    glm::mat3 S = scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
+	// mapping from the splat to screen space
+	glm::mat3 M = W * glm::mat3(R[0], R[1], px) + T;
+	glm::mat3 M_inv = glm::inverse(glm::dmat3(M));
+	glm::mat3 P_inv = glm::mat3(1.0f/intrins.x, 0.0, 0.0, 0.0, 1.0f/intrins.y, 0.0,-intrins.z/intrins.x, -intrins.w/intrins.y, 1.0);
+    glm::mat3 S_inv = scale_to_mat({1.0f/scale.x, 1.0f/scale.y, 1.0f}, 1.0f);
+	glm::mat3 Ms = P * M * S;
+	glm::mat3 Ms_inv = S_inv * M_inv * P_inv;
+
 
     glm::mat3 Qu = glm::mat3(
         1.0,0.0,0.0,
@@ -694,10 +699,10 @@ inline __device__ void computeConic3D(
         0.0f,0.0f,dL_dcov3D[5]
     );    
     // (Q.T @ S).T @ grad_in + (grad_in @ (S @ Q).T).T = S.T @ Q @ grad_in + (S @ Q) @ grad_in.T
-    glm::mat3 dL_dM_inv = glm::transpose(glm::transpose(M_inv) * Qu) * dL_dQ + glm::transpose(dL_dQ * glm::transpose(Qu * M_inv)); 
+    glm::mat3 dL_dMs_inv = glm::transpose(glm::transpose(Ms_inv) * Qu) * dL_dQ + glm::transpose(dL_dQ * glm::transpose(Qu * Ms_inv));
     // (K^{-1})' = -K^{-1}K'k^{-1}'
-    glm::mat3 dL_M_view = - glm::transpose(M_inv) * dL_dM_inv * glm::transpose(M_inv);
-    glm::mat3 dL_dM = glm::transpose(P * W) * dL_M_view;
+    glm::mat3 dL_Ms = - glm::transpose(Ms_inv) * dL_dMs_inv * glm::transpose(Ms_inv);
+    glm::mat3 dL_dM = glm::transpose(P * W) * dL_Ms;
     // v_M_world = glm::transpose(proj * W) * v_M;
 
     // computeScreenMap_vjp(M_world, viewmat, intrins, v_M, v_M_world);
@@ -713,23 +718,13 @@ inline __device__ void computeConic3D(
 
 	// assign values
 	dL_dmean3D = dL_dpx;
-    dL_drot = quat_to_rotmat_vjp(rotation, dL_dR);
+    dL_drot = quat_to_rotmat_vjp(quat, dL_dR);
 	dL_dscale = glm::vec3(
         (float)glm::dot(dL_dstu, R[0]),
         (float)glm::dot(dL_dstv, R[1]),
         0.0f
     );
 
-    // unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
-    // if (idx == 0) {
-        // printf("dL_dQ %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dQ[0].x, dL_dQ[0].y, dL_dQ[0].z, dL_dQ[1].x, dL_dQ[1].y, dL_dQ[1].z, dL_dQ[2].x, dL_dQ[2].y, dL_dQ[2].z);
-        // printf("dL_dM_inv %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dM_inv[0].x, dL_dM_inv[0].y, dL_dM_inv[0].z, dL_dM_inv[1].x, dL_dM_inv[1].y, dL_dM_inv[1].z, dL_dM_inv[2].x, dL_dM_inv[2].y, dL_dM_inv[2].z);
-        // printf("M_inv %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, M_inv[0].x, M_inv[0].y, M_inv[0].z, M_inv[1].x, M_inv[1].y, M_inv[1].z, M_inv[2].x, M_inv[2].y, M_inv[2].z);
-        // printf("dL_dM %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dM[0].x, dL_dM[0].y, dL_dM[0].z, dL_dM[1].x, dL_dM[1].y, dL_dM[1].z, dL_dM[2].x, dL_dM[2].y, dL_dM[2].z);
-        // printf("dL_dR %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dR[0].x, dL_dR[0].y, dL_dR[0].z, dL_dR[1].x, dL_dR[1].y, dL_dR[1].z, dL_dR[2].x, dL_dR[2].y, dL_dR[2].z);
-		// printf("dL_dscale %d [%.8f, %.8f, %.8f]\n", idx, dL_dscale.x, dL_dscale.y, dL_dscale.z);
-		// printf("dL_dmean3d %d [%.8f, %.8f, %.8f]\n", idx, dL_dmean3D.x, dL_dmean3D.y, dL_dmean3D.z);
-    // }
 }
 
 

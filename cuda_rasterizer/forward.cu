@@ -70,6 +70,11 @@ __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const 
 	return glm::max(result, 0.0f);
 }
 
+__forceinline__ __device__ float NormL2(glm::mat3 M) {
+	float norm = glm::dot(M[0], M[0]) + glm::dot(M[1], M[1]) + glm::dot(M[2], M[2]);
+	return norm;
+}
+
 __device__ bool computeConic3D(const glm::vec3 &p_world, const glm::vec4 &quat, const glm::vec3 &scale, const float *viewmat, const float4 &intrins, float *cur_cov3d, glm::vec3 & normal) {
     // camera information 
     const glm::mat3 W = glm::mat3(
@@ -86,19 +91,25 @@ __device__ bool computeConic3D(const glm::vec3 &p_world, const glm::vec4 &quat, 
         intrins.z, intrins.w, 1.0
     );
 
-    glm::mat3 R = quat_to_rotmat(glm::vec4(quat.x, quat.y, quat.z, quat.w));
-    glm::mat3 S = scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);                 // scale
-    glm::mat3 M = glm::mat3(R[0], R[1], px);                                    // object local coordinate
-    glm::dmat3 M_view = P * (W * M + T) * S;                                     // view space
-    glm::mat3 M_inv = glm::inverse(M_view);
+    glm::mat3 R = quat_to_rotmat(quat);
+    glm::mat3 S = scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
+	// mapping from the splat to screen space
+	glm::mat3 M = W * glm::mat3(R[0], R[1], px) + T;
+	// don't draw if the matrix is singular
+	if (glm::determinant(M) == 0.0f) return false;
 
-    // conditiM on number of M_view
-    glm::mat3 M_un = (W * M + T);
-    glm::mat3 M_un_inv = S * M_inv * P;
-    float norm = glm::dot(M_un[0], M_un[0]) + glm::dot(M_un[1], M_un[1]) + glm::dot(M_un[2], M_un[2]);
-    float norm_inv = glm::dot(M_un_inv[0], M_un_inv[0]) + glm::dot(M_un_inv[1], M_un_inv[1]) + glm::dot(M_un_inv[2], M_un_inv[2]);
-    float cond_num = norm * norm_inv;
-    if (cond_num > COND_THRES) return false;
+	glm::mat3 M_inv = glm::inverse(glm::dmat3(M));
+	float cond_num = NormL2(M) * NormL2(M_inv);
+
+	// don't draw if the matrix is ill-conditioned
+	if (cond_num > COND_THRES) return false;
+	glm::mat3 Ms = P * M * S;
+	
+	// viewport space mapping
+	// S is interprete as the variance matrix
+	glm::mat3 P_inv = glm::mat3(1.0f/intrins.x, 0.0, 0.0, 0.0, 1.0f/intrins.y, 0.0,-intrins.z/intrins.x, -intrins.w/intrins.y, 1.0);
+    glm::mat3 S_inv = scale_to_mat({1.0f/scale.x, 1.0f/scale.y, 1.0f}, 1.0f);
+	glm::mat3 Ms_inv = S_inv * M_inv * P_inv;
 
     glm::mat3 Qu = glm::mat3(
         1.0,0.0,0.0,
@@ -106,7 +117,8 @@ __device__ bool computeConic3D(const glm::vec3 &p_world, const glm::vec4 &quat, 
         0.0,0.0,-1.0
     );
 
-    glm::mat3 Qx = glm::transpose(M_inv) * Qu * M_inv;
+	// the transformed conic
+    glm::mat3 Qx = glm::transpose(Ms_inv) * Qu * Ms_inv;
     cur_cov3d[0] = Qx[0][0]; // A
     cur_cov3d[1] = Qx[0][1]; // B
     cur_cov3d[2] = Qx[1][1]; // C
@@ -116,15 +128,6 @@ __device__ bool computeConic3D(const glm::vec3 &p_world, const glm::vec4 &quat, 
 
     normal = {R[2].x, R[2].y, R[2].z};
 
-	// unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
-	// if (idx % 32 == 0) {
-    //     printf("%d quat %.4f %.4f %.4f %.4f\n", idx, quat.x, quat.y, quat.z,quat.w);
-    //     printf("%d scale %.4f %.4f %.4f\n", idx, scale.x, scale.y, scale.z);
-	// 	// printf("%d camera center %.4f %.4f %.4f\n", idx, viewmat[12], viewmat[13], viewmat[14]);
-    //     printf("%d R[0] %.4f %.4f %.4f\n", idx, R[0].x, R[0].y, R[0].z);
-    //     printf("%d R[1] %.4f %.4f %.4f\n", idx, R[1].x, R[1].y, R[1].z);
-    //     printf("%d R[2] %.4f %.4f %.4f\n", idx, R[2].x, R[2].y, R[2].z);
-	// }
     return true;
 }
 
@@ -136,30 +139,40 @@ __device__ bool computeConic2D(const float *cur_cov3d, float3 &conic, float2 &ce
     float E = cur_cov3d[4]; // E
     float F = -cur_cov3d[5]; // F
 
-    const float det = A * C - B * B;
-    if (det == 0.0f) 
-        return false;
+    float det = A * C - B * B;
+	// draw only ellipses
+    if (det <= 0.0f) return false;
     
     float inv_det = 1.f / det;
-
+	// compute center 
     const float cx = (B * E - C * D) * inv_det;
     const float cy = (B * D - A * E) * inv_det;
     
+	// compute isovalue
     float isoval = (F - D * cx - E * cy);
-    // handle zero isovalue
     if (isoval <= 0.0f) return false;
 
-    const float dx = sqrtf(C * isoval * inv_det); // bounding dx
-    const float dy = sqrtf(A * isoval * inv_det); // bounding dy
-
+	// compute Qs
 	float inv_iso = 1.0f / isoval;
 	A = A * inv_iso;
 	B = B * inv_iso;
 	C = C * inv_iso;
+	isoval = isoval * inv_iso;
+	// add low pass filter here?
+	// TODO
 
-    aabb = {dx, dy};
+	// compute bounding box
+	det = (A * C - B * B);
+	// draw only ellipses
+	if (det <= 0.0f) return false;
+	inv_det = 1 / det;
+	const float dx = sqrtf(C * isoval * inv_det); // bounding dx
+    const float dy = sqrtf(A * isoval * inv_det); // bounding dy
+    
+	conic = {A, B, C};
+	aabb = {dx, dy};
     center = {cx, cy};
-    conic = {A, B, C};
+	
     return true;
 }
 
@@ -242,13 +255,8 @@ __global__ void preprocessCUDA(int P, int D, int M,
     ok = computeConic2D(cur_cov3d, conic, center, aabb);
     if (!ok) return;
 
-	float3 cov2d;
-    float radius;
-    ok = compute_conic_bounds(conic, cov2d, radius);
-	if (!ok) return;
-
 	// add the bounding of countour
-	radius = radius + max(aabb.x, aabb.y);
+	float radius = ceil(3.0f * max(aabb.x, aabb.y));
 
 	uint2 rect_min, rect_max;
 	getRect(center, radius, rect_min, rect_max, grid);
