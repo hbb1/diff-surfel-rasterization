@@ -172,7 +172,7 @@ __device__ bool computeConic2D(const float *cur_cov3d, float3 &conic, float2 &ce
 	conic = {A, B, C};
 	aabb = {dx, dy};
     center = {cx, cy};
-	
+
     return true;
 }
 
