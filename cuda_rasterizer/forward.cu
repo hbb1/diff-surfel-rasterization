@@ -153,7 +153,7 @@ __device__ bool computeConic2D(const float *cur_cov3d, float3 &conic, float2 &ce
     if (isoval <= 0.0f) return false;
 
 	// compute Qs
-	float inv_iso = 1.0f / isoval;
+	float inv_iso = FG / isoval;
 	A = A * inv_iso;
 	B = B * inv_iso;
 	C = C * inv_iso;

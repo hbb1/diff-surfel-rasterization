@@ -606,9 +606,9 @@ __global__ void computeConic2D(int P,
     const float isoval = (F - D * cx - E * cy);
 
 	// normalized notice that iso is differentiable with respect to cov3d
-	float inv_iso = 1.0f / isoval;
+	float inv_iso = FG / isoval;
 	float dL_dinv = (dL_dconic.x * A + dL_dconic.y * B + dL_dconic.z * C);
-	float dL_diso = dL_dinv * (-1.0f * (inv_iso * inv_iso));
+	float dL_diso = dL_dinv * (inv_iso * inv_iso) * (-FG);
 	float3 dL_dconic2 = {dL_dconic.x * inv_iso, dL_dconic.y * inv_iso, dL_dconic.z * inv_iso};
 	
 	// dL_dconic w.r.t center iso 
