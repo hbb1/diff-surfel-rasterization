@@ -256,7 +256,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
     if (!ok) return;
 
 	// add the bounding of countour
-	float radius = ceil(3.0f * max(aabb.x, aabb.y));
+	float radius = ceil(3.f * rsqrtf(FG) * max(aabb.x, aabb.y));
 
 	uint2 rect_min, rect_max;
 	getRect(center, radius, rect_min, rect_max, grid);
