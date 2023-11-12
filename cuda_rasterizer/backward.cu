@@ -569,6 +569,37 @@ renderCUDA(
 	}
 }
 
+__device__ float3 filterConic(const float3 conic, const float3 dL_dconic) {
+	float A = conic.x;
+	float B = conic.y;
+	float C = conic.z;
+	float detQs = A * C - B * B;
+	float A1 = A + detQs * FilterSize;
+	float B1 = B;
+	float C1 = C + detQs * FilterSize;
+	// A1, B1, C1, detQs
+	float detQ = A1 * C1 - B1 * B1;
+	float inv_detQ = 1.f / detQ;
+	float denorm = detQs * inv_detQ;
+
+	float det_inv_sqaure = -detQs * (inv_detQ) * (inv_detQ);
+	float ddenorm_dA1 =  det_inv_sqaure * (C1);
+	float ddenorm_dB1 =  det_inv_sqaure * (-2.f * B1);
+	float ddenorm_dC1 =  det_inv_sqaure *  (A1);
+	
+	float dL_dA1 = dL_dconic.x * (A1 * ddenorm_dA1 + denorm)+ dL_dconic.y * (B1 * ddenorm_dA1) + dL_dconic.z * (C1 * ddenorm_dA1);
+	float dL_dB1 = dL_dconic.x * (A1 * ddenorm_dB1) + dL_dconic.y * (B1 * ddenorm_dB1 + denorm) + dL_dconic.z * (C1 * ddenorm_dB1);
+	float dL_dC1 = dL_dconic.x * (A1 * ddenorm_dC1) + dL_dconic.y * (B1 * ddenorm_dC1) + dL_dconic.z * (C1 * ddenorm_dC1 + denorm);
+	float dL_ddetQs = (dL_dconic.x * A1 + dL_dconic.y * B1 + dL_dconic.z * C1) * inv_detQ;
+	
+	float ddet_da = C;
+	float ddet_db = -2 * B;
+	float ddet_dc = A;
+	float dL_dA = dL_dA1 * (1.f + FilterSize * ddet_da) + dL_dC1 * FilterSize * ddet_da + dL_ddetQs * ddet_da;
+	float dL_dB = dL_dA1 * FilterSize * ddet_db + 1.f * dL_dB1 + dL_dC1 * FilterSize * ddet_db + dL_ddetQs * ddet_db;
+	float dL_dC = dL_dA1 * FilterSize * ddet_dc + dL_dC1 * (1.f + FilterSize * ddet_dc) + dL_ddetQs * ddet_dc;
+	return float3({dL_dA, dL_dB, dL_dC});
+}
 
 
 __global__ void computeConic2D(int P, 
@@ -583,10 +614,8 @@ __global__ void computeConic2D(int P,
 	if (idx >= P || !(radii[idx] > 0))
 		return;
 	
-	const float3 dL_dconic = {dL_dconics[4 * idx], dL_dconics[4 * idx + 1], dL_dconics[4 * idx + 3]};
+	const float3 dL_dconic_in = {dL_dconics[4 * idx], dL_dconics[4 * idx + 1], dL_dconics[4 * idx + 3]};
 	const float2 dL_dcenter = {dL_dmean2Ds[idx].x * mean2D_scaler.x, dL_dmean2Ds[idx].y * mean2D_scaler.y};
-	// const float3 dL_dconic = {1.0f, 1.0f, 1.0f};
-	// const float2 dL_dcenter = {1.0f, 1.0f};
 
 	const float* cov3D = cov3Ds + 6 * idx;
 	const float A = cov3D[0]; 	// A
@@ -604,12 +633,16 @@ __global__ void computeConic2D(int P,
     float cx = (B * E  - C * D) * inv_det;
     float cy = (B * D  - A * E) * inv_det;
     const float isoval = (F - D * cx - E * cy);
+	float inv_iso = FG / isoval;
+
+	// compute the gradient with respect to the original conic
+	const float3 conic_in = {A * inv_iso, B * inv_iso, C * inv_iso};
+	const float3 dL_dconic = filterConic(conic_in, dL_dconic_in);
 
 	// normalized notice that iso is differentiable with respect to cov3d
-	float inv_iso = FG / isoval;
-	float dL_dinv = (dL_dconic.x * A + dL_dconic.y * B + dL_dconic.z * C);
-	float dL_diso = dL_dinv * (inv_iso * inv_iso) * (-FG);
 	float3 dL_dconic2 = {dL_dconic.x * inv_iso, dL_dconic.y * inv_iso, dL_dconic.z * inv_iso};
+	float dL_dinv = (dL_dconic.x * A + dL_dconic.y * B + dL_dconic.z * C);
+	float dL_diso = dL_dinv * (inv_iso * inv_iso) / (-FG);
 	
 	// dL_dconic w.r.t center iso 
 	float dcx_ddelta = (B * E - C * D) * (-inv_det * inv_det);
@@ -642,10 +675,15 @@ __global__ void computeConic2D(int P,
     dL_dcov3Ds[6 * idx + 5] = -dL_diso * diso_df;
 
 	// if (idx == 0) {
-	// 	printf("%d cov3D %.4f %.4f %.4f %.4f %.4f %.4f\n", idx, cov3D[0], cov3D[1], cov3D[2], cov3D[3], cov3D[4], cov3D[5]);
-	// 	printf("%d dL_dcov %.4f %.4f %.4f %.4f %.4f %.4f\n", idx, dL_dcov3Ds[0], dL_dcov3Ds[1], dL_dcov3Ds[2], dL_dcov3Ds[3], dL_dcov3Ds[4], dL_dcov3Ds[5]);
-	// 	printf("%d dL_dconics [%.8f,%.8f,%.8f]\n", idx, dL_dconic.x, dL_dconic.y, dL_dconic.z);
+	// 	printf("%d dcenter [%.8f,%.8f]\n", idx, cx, cy);
 	// 	printf("%d dL_dcenter [%.8f,%.8f]\n", idx, dL_dcenter.x, dL_dcenter.y);
+	// 	printf("%d cov3D %.4f %.4f %.4f %.4f %.4f %.4f\n", idx, cov3D[0], cov3D[1], cov3D[2], cov3D[3], cov3D[4], cov3D[5]);
+	// 	printf("%d dL_dconics0 [%.8f,%.8f,%.8f]\n", idx, dL_dconic_in.x, dL_dconic_in.y, dL_dconic_in.z);
+	// 	printf("%d dL_dconics1 [%.8f,%.8f,%.8f]\n", idx, dL_dconic.x, dL_dconic.y, dL_dconic.z);
+	// 	printf("%d dL_diso [%.8f]\n", idx, dL_diso);
+	// 	printf("%d dL_dcov %.4f %.4f %.4f %.4f %.4f %.4f\n", idx, dL_dcov3Ds[0], dL_dcov3Ds[1], dL_dcov3Ds[2], dL_dcov3Ds[3], dL_dcov3Ds[4], dL_dcov3Ds[5]);
+	// 	// incorrect
+	// 	printf("%d dL_dconics2 [%.8f,%.8f,%.8f]\n", idx, dL_dconic2.x, dL_dconic2.y, dL_dconic2.z);
 	// }
 }
 

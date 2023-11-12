@@ -131,6 +131,23 @@ __device__ bool computeConic3D(const glm::vec3 &p_world, const glm::vec4 &quat, 
     return true;
 }
 
+
+__device__ float3 filterConic(const float3 conic) {
+	float A = conic.x;
+	float B = conic.y;
+	float C = conic.z;
+	float detQs = A * C - B * B;
+	A = A + detQs * FilterSize;
+	B = B;
+	C = C + detQs * FilterSize;
+	float detQ2 = A * C - B * B;
+	float denorm = detQs / detQ2;
+	A *= denorm;
+	B *= denorm;
+	C *= denorm;
+	return float3({A, B, C});
+}
+
 __device__ bool computeConic2D(const float *cur_cov3d, float3 &conic, float2 &center, float2 &aabb) {
     float A = cur_cov3d[0]; // A
     float B = cur_cov3d[1]; // B
@@ -165,6 +182,14 @@ __device__ bool computeConic2D(const float *cur_cov3d, float3 &conic, float2 &ce
 	det = (A * C - B * B);
 	// draw only ellipses
 	if (det <= 0.0f) return false;
+	float3 Qf = filterConic({A, B, C});
+	A = Qf.x;
+	B = Qf.y;
+	C = Qf.z;
+
+	det = (A * C - B * B);
+	if (det <= 0.0f) return false;
+
 	inv_det = 1 / det;
 	const float dx = sqrtf(C * isoval * inv_det); // bounding dx
     const float dy = sqrtf(A * isoval * inv_det); // bounding dy
@@ -240,6 +265,8 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float3 p_view;
 	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, prefiltered, p_view))
 		return;
+	
+	// view frustum cullling TODO
 
 	// compute conics 
     float *cur_cov3d = &(cov3Ds[6 * idx]);
