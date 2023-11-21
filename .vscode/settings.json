@@ -55,7 +55,9 @@
         "typeinfo": "cpp",
         "string": "cpp",
         "concepts": "cpp",
-        "string_view": "cpp"
+        "string_view": "cpp",
+        "valarray": "cpp"
     },
-    "cmake.configureOnOpen": false
+    "cmake.configureOnOpen": false,
+    "C_Cpp.errorSquiggles": "disabled"
 }

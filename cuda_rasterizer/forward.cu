@@ -71,7 +71,7 @@ __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const 
 }
 
 
-__device__ bool ViewTransform(const glm::vec3 &p_world, const glm::vec4 &quat, const glm::vec3 &scale, const float *viewmat, const float4 &intrins, glm::vec3 & normal, float2& center, float2& extent) {
+__device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, const glm::vec3 &scale, const float *viewmat, const float4 &intrins, float* cov3D) {
     // camera information 
     const glm::mat3 W = glm::mat3(
         viewmat[0],viewmat[1],viewmat[2],
@@ -99,6 +99,26 @@ __device__ bool ViewTransform(const glm::vec3 &p_world, const glm::vec4 &quat, c
 		glm::vec4(M[2], 1.0)
 	));
 
+	cov3D[0] = T[0].x;
+	cov3D[1] = T[0].y;
+	cov3D[2] = T[0].z;
+	cov3D[3] = T[1].x;
+	cov3D[4] = T[1].y;
+	cov3D[5] = T[1].z;
+	cov3D[6] = T[2].x;
+	cov3D[7] = T[2].y;
+	cov3D[8] = T[2].z;
+	return true;
+}
+
+__device__ void computeCenter(const float *cov3D, float2 & center, float2 & extent) {
+	glm::mat4x3 T = glm::mat4x3(
+		cov3D[0], cov3D[1], cov3D[2],
+		cov3D[3], cov3D[4], cov3D[5],
+		cov3D[6], cov3D[7], cov3D[8],
+		cov3D[6], cov3D[7], cov3D[8]
+	);
+
 	float d = glm::dot(glm::vec3(1.0, 1.0, -1.0), T[3] * T[3]);
 	glm::vec3 f = glm::vec3(1.0, 1.0, -1.0) * (1.0f / d);
 
@@ -115,18 +135,8 @@ __device__ bool ViewTransform(const glm::vec3 &p_world, const glm::vec4 &quat, c
 		);
 
 	glm::vec3 h = sqrt(max(glm::vec3(0.0), h0)) + glm::vec3(0.0, 0.0, 1e-2);
-
-
-    normal = R[2];
 	center = {p.x, p.y};
 	extent = {h.x, h.y};
-
-	auto idx = cg::this_grid().thread_rank();
-	if (idx % 32 == 0) {
-        printf("%d center %.4f %.4f\n", idx, center.x, center.y);
-        printf("%d extent %.4f %.4f %.4f\n", idx, extent.x, extent.y);
-	}
-    return true;
 }
 
 // Perform initial steps for each Gaussian prior to rasterization.
@@ -150,8 +160,6 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	int* radii,
 	float2* points_xy_image,
 	float* depths,
-	// float* isovals,
-	// float3* normals,
 	float* cov3Ds,
 	float* rgb,
 	float4* conic_opacity,
@@ -178,12 +186,23 @@ __global__ void preprocessCUDA(int P, int D, int M,
 		return;
 	
 	// view frustum cullling TODO
-	bool ok;
-    glm::vec3 normal;
+	const float* cov3D;
+	if (cov3D_precomp != nullptr)
+	{
+		cov3D = cov3D_precomp + idx * 9;
+	}
+	else
+	{
+		bool ok;
+		ok = computeCov3D(p_world, quat, scale, viewmatrix, intrins, cov3Ds + idx * 9);
+		if (!ok) return;
+		cov3D = cov3Ds + idx * 9;
+	}
+	
+	//  compute center and extent
     float2 center;
     float2 extent;
-	ok = ViewTransform(p_world, quat, scale, viewmatrix, intrins, normal, center, extent);
-	if (!ok) return;
+	computeCenter(cov3D, center, extent);
 
 	// add the bounding of countour
 	float radius = ceil(3.f * max(extent.x, extent.y));
@@ -204,9 +223,13 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	depths[idx] = p_view.z;
 	radii[idx] = (int)radius;
 	points_xy_image[idx] = center;
-	// conic_opacity[idx] = {conic.x, conic.y, conic.z, opacities[idx]};
+	conic_opacity[idx] = {0.0, 0.0, 0.0, opacities[idx]};
 	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
-	
+
+	if (idx % 32 == 0) {
+        printf("%d center %.4f %.4f\n", idx, center.x, center.y);
+        printf("%d extent %.4f %.4f %.4f\n", idx, extent.x, extent.y);
+	}
 }
 
 // Main rasterization method. Collaboratively works on one tile per
@@ -220,6 +243,7 @@ renderCUDA(
 	int W, int H,
 	const float2* __restrict__ points_xy_image,
 	const float* __restrict__ features,
+	const float* __restrict__ cov3Ds,
 	const float* __restrict__ depths,
 	const float4* __restrict__ conic_opacity,
 	float* __restrict__ final_T,
@@ -251,6 +275,9 @@ renderCUDA(
 	__shared__ int collected_id[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
+	__shared__ float3 collected_Tu[BLOCK_SIZE];
+	__shared__ float3 collected_Tv[BLOCK_SIZE];
+	__shared__ float3 collected_Tw[BLOCK_SIZE];
 
 	// Initialize helper variables
 	float T = 1.0f;
@@ -275,6 +302,9 @@ renderCUDA(
 			collected_id[block.thread_rank()] = coll_id;
 			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
 			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
+			collected_Tu[block.thread_rank()] = {cov3Ds[9 * coll_id+0], cov3Ds[9 * coll_id+1], cov3Ds[9 * coll_id+2]};
+			collected_Tv[block.thread_rank()] = {cov3Ds[9 * coll_id+3], cov3Ds[9 * coll_id+4], cov3Ds[9 * coll_id+5]};
+			collected_Tw[block.thread_rank()] = {cov3Ds[9 * coll_id+6], cov3Ds[9 * coll_id+7], cov3Ds[9 * coll_id+8]};
 		}
 		block.sync();
 
@@ -284,12 +314,28 @@ renderCUDA(
 			// Keep track of current position in range
 			contributor++;
 
-			// Resample using conic matrix (cf. "Surface 
-			// Splatting" by Zwicker et al., 2001)
+			// compute ray-splat intersection
 			float2 xy = collected_xy[j];
-			float2 d = { xy.x - pixf.x, xy.y - pixf.y };
+            float3 Tu = collected_Tu[j];
+            float3 Tv = collected_Tv[j];
+            float3 Tw = collected_Tw[j];
+			// compute two planes intersection as the ray intersection
+			float3 k = {-Tu.x + pixf.x * Tw.x, -Tu.y + pixf.x * Tw.y, -Tu.z + pixf.x * Tw.z};
+			float3 l = {-Tv.x + pixf.y * Tw.x, -Tv.y + pixf.y * Tw.y, -Tv.z + pixf.y * Tw.z};
+			float2 s = {(l.z * k.y - k.z * l.y), (l.z * k.x - k.z * l.x)};
+			float inv_norm = 1.0f / (k.x * l.y - k.y * l.x);
+			float rho3d = (s.x * s.x + s.y * s.y) * inv_norm * inv_norm; // splat distance
+			
+			// add low pass filter according to Botsch et al. [2005]. 
+			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
+			float rho2d = d.x * d.x + d.y * d.y; // screen distance
+			float rho = min(rho3d, rho2d);
+			
+			// compute accurate depth when necessary
+			float depth = (s.x * Tw.x + s.y * Tw.y) * inv_norm + Tw.z;
 			float4 con_o = collected_conic_opacity[j];
-			float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;
+
+			float power = -0.5f * rho;
 			if (power > 0.0f)
 				continue;
 
@@ -310,7 +356,7 @@ renderCUDA(
 			// Eq. (3) from 3D Gaussian splatting paper.
 			for (int ch = 0; ch < CHANNELS; ch++)
 				C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
-			D += depths[collected_id[j]] * alpha * T;
+			D += depth * alpha * T;
 
 			T = test_T;
 
@@ -339,6 +385,7 @@ void FORWARD::render(
 	int W, int H,
 	const float2* means2D,
 	const float* colors,
+	const float* cov3Ds,
 	const float* depths,
 	const float4* conic_opacity,
 	float* final_T,
@@ -353,6 +400,7 @@ void FORWARD::render(
 		W, H,
 		means2D,
 		colors,
+		cov3Ds,
 		depths,
 		conic_opacity,
 		final_T,
@@ -381,8 +429,6 @@ void FORWARD::preprocess(int P, int D, int M,
 	int* radii,
 	float2* means2D,
 	float* depths,
-	// float* isovals,
-	// float3* normals,
 	float* cov3Ds,
 	float* rgb,
 	float4* conic_opacity,
@@ -410,8 +456,6 @@ void FORWARD::preprocess(int P, int D, int M,
 		radii,
 		means2D,
 		depths,
-		// isovals,
-		// normals,
 		cov3Ds,
 		rgb,
 		conic_opacity,

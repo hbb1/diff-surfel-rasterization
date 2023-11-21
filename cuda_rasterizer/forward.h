@@ -57,6 +57,7 @@ namespace FORWARD
 		int W, int H,
 		const float2* points_xy_image,
 		const float* features,
+		const float* cov3Ds,
 		const float* depths,
 		const float4* conic_opacity,
 		float* final_T,
