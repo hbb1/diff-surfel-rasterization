@@ -70,12 +70,8 @@ __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const 
 	return glm::max(result, 0.0f);
 }
 
-__forceinline__ __device__ float NormL2(glm::mat3 M) {
-	float norm = glm::dot(M[0], M[0]) + glm::dot(M[1], M[1]) + glm::dot(M[2], M[2]);
-	return norm;
-}
 
-__device__ bool computeConic3D(const glm::vec3 &p_world, const glm::vec4 &quat, const glm::vec3 &scale, const float *viewmat, const float4 &intrins, float *cur_cov3d, glm::vec3 & normal) {
+__device__ bool ViewTransform(const glm::vec3 &p_world, const glm::vec4 &quat, const glm::vec3 &scale, const float *viewmat, const float4 &intrins, glm::vec3 & normal, float2& center, float2& extent) {
     // camera information 
     const glm::mat3 W = glm::mat3(
         viewmat[0],viewmat[1],viewmat[2],
@@ -83,138 +79,53 @@ __device__ bool computeConic3D(const glm::vec3 &p_world, const glm::vec4 &quat, 
 		viewmat[8],viewmat[9],viewmat[10]
     ); // viewmat 
 
-    const glm::vec3 px = glm::vec3(p_world.x, p_world.y, p_world.z);            // center
-    const glm::mat3 T = glm::mat3(glm::vec3(0.0f), glm::vec3(0.0f), glm::vec3(viewmat[12], viewmat[13], viewmat[14]));
-    const glm::mat3 P = glm::mat3(
-        intrins.x, 0.0, 0.0, 
-        0.0, intrins.y, 0.0,
-        intrins.z, intrins.w, 1.0
+    // const glm::vec3 px = glm::vec3(p_world.x, p_world.y, p_world.z);            // center
+    const glm::vec3 cam_pos = glm::vec3(viewmat[12], viewmat[13], viewmat[14]); // camera center
+    const glm::mat4 P = glm::mat4(
+        intrins.x, 0.0, 0.0, 0.0,
+        0.0, intrins.y, 0.0, 0.0,
+        intrins.z, intrins.w, 1.0, 1.0,
+		0.0, 0.0, 0.0, 0.0
     );
 
-    glm::mat3 R = quat_to_rotmat(quat);
-    glm::mat3 S = scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
-	// mapping from the splat to screen space
-	glm::mat3 M = W * glm::mat3(R[0], R[1], px) + T;
+    glm::mat3 R = quat_to_rotmat(quat) * scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
+	glm::mat3 M = glm::mat3(W * R[0], W * R[1], W * p_world + cam_pos);
 	// don't draw if the matrix is singular
 	if (glm::determinant(M) == 0.0f) return false;
 
-	glm::mat3 M_inv = glm::inverse(glm::dmat3(M));
-	float cond_num = NormL2(M) * NormL2(M_inv);
+	glm::mat4x3 T = glm::transpose(P * glm::mat3x4(
+		glm::vec4(M[0], 0.0),
+		glm::vec4(M[1], 0.0),
+		glm::vec4(M[2], 1.0)
+	));
 
-	// don't draw if the matrix is ill-conditioned
-	if (cond_num > COND_THRES) return false;
-	glm::mat3 Ms = P * M * S;
+	float d = glm::dot(glm::vec3(1.0, 1.0, -1.0), T[3] * T[3]);
+	glm::vec3 f = glm::vec3(1.0, 1.0, -1.0) * (1.0f / d);
+
+	glm::vec3 p = glm::vec3(
+		glm::dot(f, T[0] * T[3]),
+        glm::dot(f, T[1] * T[3]), 
+		glm::dot(f, T[2] * T[3]));
 	
-	// viewport space mapping
-	// S is interprete as the variance matrix
-	glm::mat3 P_inv = glm::mat3(1.0f/intrins.x, 0.0, 0.0, 0.0, 1.0f/intrins.y, 0.0,-intrins.z/intrins.x, -intrins.w/intrins.y, 1.0);
-    glm::mat3 S_inv = scale_to_mat({1.0f/scale.x, 1.0f/scale.y, 1.0f}, 1.0f);
-	glm::mat3 Ms_inv = S_inv * M_inv * P_inv;
+	glm::vec3 h0 = p * p - 
+		glm::vec3(
+			glm::dot(f, T[0] * T[0]),
+            glm::dot(f, T[1] * T[1]), 
+			glm::dot(f, T[2] * T[2])
+		);
 
-    glm::mat3 Qu = glm::mat3(
-        1.0,0.0,0.0,
-        0.0,1.0,0.0,
-        0.0,0.0,-1.0
-    );
-
-	// the transformed conic
-    glm::mat3 Qx = glm::transpose(Ms_inv) * Qu * Ms_inv;
-    cur_cov3d[0] = Qx[0][0]; // A
-    cur_cov3d[1] = Qx[0][1]; // B
-    cur_cov3d[2] = Qx[1][1]; // C
-    cur_cov3d[3] = Qx[0][2]; // D
-    cur_cov3d[4] = Qx[1][2]; // E
-    cur_cov3d[5] = Qx[2][2]; // F
-
-    normal = {R[2].x, R[2].y, R[2].z};
-
-    return true;
-}
+	glm::vec3 h = sqrt(max(glm::vec3(0.0), h0)) + glm::vec3(0.0, 0.0, 1e-2);
 
 
-__device__ float3 filterConic(const float3 conic) {
-	float A = conic.x;
-	float B = conic.y;
-	float C = conic.z;
-	float detQs = A * C - B * B;
-	A = A + detQs * FilterSize;
-	B = B;
-	C = C + detQs * FilterSize;
-	float detQ2 = A * C - B * B;
-	float denorm = detQs / detQ2;
-	A *= denorm;
-	B *= denorm;
-	C *= denorm;
-	return float3({A, B, C});
-}
+    normal = R[2];
+	center = {p.x, p.y};
+	extent = {h.x, h.y};
 
-__device__ bool computeConic2D(const float *cur_cov3d, float3 &conic, float2 &center, float2 &aabb) {
-    float A = cur_cov3d[0]; // A
-    float B = cur_cov3d[1]; // B
-    float C = cur_cov3d[2]; // C
-    float D = cur_cov3d[3]; // D
-    float E = cur_cov3d[4]; // E
-    float F = -cur_cov3d[5]; // F
-
-    float det = A * C - B * B;
-	// draw only ellipses
-    if (det <= 0.0f) return false;
-    
-    float inv_det = 1.f / det;
-	// compute center 
-    const float cx = (B * E - C * D) * inv_det;
-    const float cy = (B * D - A * E) * inv_det;
-    
-	// compute isovalue
-    float isoval = (F - D * cx - E * cy);
-    if (isoval <= 0.0f) return false;
-
-	// compute Qs
-	float inv_iso = FG / isoval;
-	A = A * inv_iso;
-	B = B * inv_iso;
-	C = C * inv_iso;
-	isoval = isoval * inv_iso;
-	// add low pass filter here?
-	// TODO
-
-	// compute bounding box
-	det = (A * C - B * B);
-	// draw only ellipses
-	if (det <= 0.0f) return false;
-	float3 Qf = filterConic({A, B, C});
-	A = Qf.x;
-	B = Qf.y;
-	C = Qf.z;
-
-	det = (A * C - B * B);
-	if (det <= 0.0f) return false;
-
-	inv_det = 1 / det;
-	const float dx = sqrtf(C * isoval * inv_det); // bounding dx
-    const float dy = sqrtf(A * isoval * inv_det); // bounding dy
-    
-	conic = {A, B, C};
-	aabb = {dx, dy};
-    center = {cx, cy};
-
-    return true;
-}
-
-__device__ bool
-compute_conic_bounds(const float3& conic, float3 & cov2d, float&radius) {
-    float inv_det = conic.x * conic.z - conic.y * conic.y;
-    if (inv_det == 0.f)
-        return false;
-    float det = 1.f / inv_det;
-    cov2d.x = conic.z * det;
-    cov2d.y = -conic.y * det;
-    cov2d.z = conic.x * det;
-    float b = 0.5f * (cov2d.x + cov2d.z);
-    float v1 = b + sqrt(max(0.1f, b * b - det));
-    float v2 = b - sqrt(max(0.1f, b * b - det));
-    // take 3 sigma of covariance
-    radius = ceil(3.f * sqrt(max(v1, v2)));
+	auto idx = cg::this_grid().thread_rank();
+	if (idx % 32 == 0) {
+        printf("%d center %.4f %.4f\n", idx, center.x, center.y);
+        printf("%d extent %.4f %.4f %.4f\n", idx, extent.x, extent.y);
+	}
     return true;
 }
 
@@ -267,24 +178,15 @@ __global__ void preprocessCUDA(int P, int D, int M,
 		return;
 	
 	// view frustum cullling TODO
-
-	// compute conics 
-    float *cur_cov3d = &(cov3Ds[6 * idx]);
-	
 	bool ok;
     glm::vec3 normal;
-	ok = computeConic3D(p_world, quat, scale, viewmatrix, intrins, cur_cov3d, normal);
+    float2 center;
+    float2 extent;
+	ok = ViewTransform(p_world, quat, scale, viewmatrix, intrins, normal, center, extent);
 	if (!ok) return;
 
-	float3 conic;
-    float2 center;
-    float2 aabb;
-    ok = computeConic2D(cur_cov3d, conic, center, aabb);
-    if (!ok) return;
-
 	// add the bounding of countour
-	float radius = ceil(3.f * rsqrtf(FG) * max(aabb.x, aabb.y));
-
+	float radius = ceil(3.f * max(extent.x, extent.y));
 	uint2 rect_min, rect_max;
 	getRect(center, radius, rect_min, rect_max, grid);
 	if ((rect_max.x - rect_min.x) * (rect_max.y - rect_min.y) == 0)
@@ -302,36 +204,9 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	depths[idx] = p_view.z;
 	radii[idx] = (int)radius;
 	points_xy_image[idx] = center;
-	conic_opacity[idx] = {conic.x, conic.y, conic.z, opacities[idx]};
+	// conic_opacity[idx] = {conic.x, conic.y, conic.z, opacities[idx]};
 	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
-
-	// if (idx % 32 == 0) {
-    //     printf("%d center %.4f %.4f depth %.4f\n", idx, center.x, center.y, p_view.z);
-    //     printf("%d normal %.4f %.4f %.4f\n", idx, normal.x, normal.y, normal.z);
-	// 	printf("%d conic %.4f %.4f %.4f\n", idx, conic.x, conic.y, conic.z);
-	// }
-        // printf("%d W[0] %.4f %.4f %.4f\n", idx, W[0].x, W[0].y, W[0].z);
-        // printf("%d W[1] %.4f %.4f %.4f\n", idx, W[1].x, W[1].y, W[1].z);
-        // printf("%d W[2] %.4f %.4f %.4f\n", idx, W[2].x, W[2].y, W[2].z);
-		// printf("%d conic %.4f %.4f %.4f\n", idx, conic.x, conic.y, conic.z);
-		// printf("%d isoval %.4f \n", idx, isoval);
-        // printf("%d centerx centery %.4f %.4f\n", idx, center.x, center.y);
-        // printf("%d p_world %.4f %.4f %.4f\n", idx, p_world.x, p_world.y,p_world.z);
-        // printf("%d p_view %.4f %.4f %.4f\n", idx, p_view.x, p_view.y, p_view.z);
-        // printf("%d scale %.4f %.4f %.4f\n", idx, scale.x, scale.y, scale.z);
-        // printf("%d quat %.4f %.4f %.4f\n", idx, quat.x, quat.y, quat.z, quat.w);
-        // printf("%d R[0] %.4f %.4f %.4f\n", idx, R[0].x, R[0].y, R[0].z);
-        // printf("%d R[1] %.4f %.4f %.4f\n", idx, R[1].x, R[1].y, R[1].z);
-        // printf("%d M_inv[0] %.4f %.4f %.4f\n", idx, M_inv[0].x, M_inv[0].y, M_inv[0].z);
-        // printf("%d M_inv[1] %.4f %.4f %.4f\n", idx, M_inv[1].x, M_inv[1].y, M_inv[1].z);    
-        // printf("%d M_inv[2] %.4f %.4f %.4f\n", idx, M_inv[2].x, M_inv[2].y, M_inv[2].z);
-        // printf("%d conic %.4f %.4f %.4f\n", idx, conic.x, conic.y, conic.z);
-        // printf("%d Q[0] %.4f %.4f %.4f\n", idx, Qx[0].x, Qx[0].y, Qx[0].z);
-        // printf("%d Q[1] %.4f %.4f %.4f\n", idx, Qx[1].x, Qx[1].y, Qx[1].z);
-        // printf("%d Q[2] %.4f %.4f %.4f\n", idx, Qx[2].x, Qx[2].y, Qx[2].z);
-    // }
-	// isovals[idx] = isoval;
-	// normals[idx] = normal;
+	
 }
 
 // Main rasterization method. Collaboratively works on one tile per

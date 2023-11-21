@@ -53,7 +53,9 @@
         "utility": "cpp",
         "typeindex": "cpp",
         "typeinfo": "cpp",
-        "string": "cpp"
+        "string": "cpp",
+        "concepts": "cpp",
+        "string_view": "cpp"
     },
     "cmake.configureOnOpen": false
 }
