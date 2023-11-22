@@ -513,7 +513,7 @@ renderCUDA(
 			float3 k = {-Tu.x + pixf.x * Tw.x, -Tu.y + pixf.x * Tw.y, -Tu.z + pixf.x * Tw.z};
 			float3 l = {-Tv.x + pixf.y * Tw.x, -Tv.y + pixf.y * Tw.y, -Tv.z + pixf.y * Tw.z};
 			float inv_norm = 1.0f / (k.x * l.y - k.y * l.x);
-			float2 s = {(l.z * k.y - k.z * l.y) * inv_norm, (l.z * k.x - k.z * l.x) * inv_norm};
+			float2 s = {(l.z * k.y - k.z * l.y) * inv_norm, -(l.z * k.x - k.z * l.x) * inv_norm};
 			float rho3d = (s.x * s.x + s.y * s.y); // splat distance
 			
 			// add low pass filter according to Botsch et al. [2005]. 
@@ -590,9 +590,9 @@ renderCUDA(
 
 				// can be optimized but factor out inv_norm
 				float3 dsx_dk = {0.0 * inv_norm + dsx_dnorm * dnorm_dk.x, l.z * inv_norm + dsx_dnorm * dnorm_dk.y, -l.y * inv_norm + dsx_dnorm * dnorm_dk.z};
-				float3 dsy_dk = {l.z * inv_norm + dsy_dnorm * dnorm_dk.x, 0.0 * inv_norm + dsy_dnorm * dnorm_dk.y, -l.x * inv_norm + dsy_dnorm * dnorm_dk.z};
+				float3 dsy_dk = {-l.z * inv_norm + dsy_dnorm * dnorm_dk.x, 0.0 * inv_norm + dsy_dnorm * dnorm_dk.y, l.x * inv_norm + dsy_dnorm * dnorm_dk.z};
 				float3 dsx_dl = {0.0 * inv_norm + dsx_dnorm * dnorm_dl.x, -k.z * inv_norm + dsx_dnorm * dnorm_dl.y, k.y * inv_norm + dsx_dnorm * dnorm_dl.z};
-				float3 dsy_dl = {-k.z * inv_norm + dsy_dnorm * dnorm_dl.x, 0.0 * inv_norm + dsy_dnorm * dnorm_dl.y, k.x * inv_norm + dsy_dnorm * dnorm_dl.z};
+				float3 dsy_dl = {k.z * inv_norm + dsy_dnorm * dnorm_dl.x, 0.0 * inv_norm + dsy_dnorm * dnorm_dl.y, -k.x * inv_norm + dsy_dnorm * dnorm_dl.z};
 
 				float3 dL_dk = {
 					dL_ds.x * dsx_dk.x + dL_ds.y * dsy_dk.x, 
@@ -970,16 +970,16 @@ void BACKWARD::preprocess(
 	// modified and gradient w.r.t. 3D covariance matrix has been computed.	
 	// propagate gradients to cov3D
 	
-	float2 mean2D_scaler = {2.0f / (focal_x * tan_fovx), 2.0f / (focal_y * tan_fovy)};
+	// float2 mean2D_scaler = {2.0f / (focal_x * tan_fovx), 2.0f / (focal_y * tan_fovy)};
 
-	computeConic2D << <(P + 255) / 256, 256 >> >(
-		P, 
-		radii,
-    	cov3Ds,
-    	dL_dconics,
-    	dL_dmean2Ds,
-    	dL_dcov3Ds,
-		mean2D_scaler);
+	// computeConic2D << <(P + 255) / 256, 256 >> >(
+	// 	P, 
+	// 	radii,
+    // 	cov3Ds,
+    // 	dL_dconics,
+    // 	dL_dmean2Ds,
+    // 	dL_dcov3Ds,
+	// 	mean2D_scaler);
 
 	// propagate gradients from cov3d to mean3d, scale, rot, sh, color
 	preprocessCUDA<NUM_CHANNELS><< <(P + 255) / 256, 256 >> > (

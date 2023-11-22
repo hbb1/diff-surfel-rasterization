@@ -323,7 +323,7 @@ renderCUDA(
 			float3 k = {-Tu.x + pixf.x * Tw.x, -Tu.y + pixf.x * Tw.y, -Tu.z + pixf.x * Tw.z};
 			float3 l = {-Tv.x + pixf.y * Tw.x, -Tv.y + pixf.y * Tw.y, -Tv.z + pixf.y * Tw.z};
 			float inv_norm = 1.0f / (k.x * l.y - k.y * l.x);
-			float2 s = {(l.z * k.y - k.z * l.y) * inv_norm, (l.z * k.x - k.z * l.x) * inv_norm};
+			float2 s = {(l.z * k.y - k.z * l.y) * inv_norm, -(l.z * k.x - k.z * l.x) * inv_norm};
 			float rho3d = (s.x * s.x + s.y * s.y); // splat distance
 			
 			// add low pass filter according to Botsch et al. [2005]. 
@@ -336,6 +336,7 @@ renderCUDA(
 			float4 con_o = collected_conic_opacity[j];
 
 			float power = -0.5f * rho;
+			// power = -0.5f * 100.f * max(rho - 1, 0.0f);
 			if (power > 0.0f)
 				continue;
 
