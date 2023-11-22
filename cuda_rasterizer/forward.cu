@@ -226,10 +226,10 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	conic_opacity[idx] = {0.0, 0.0, 0.0, opacities[idx]};
 	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
 
-	if (idx % 32 == 0) {
-        printf("%d center %.4f %.4f\n", idx, center.x, center.y);
-        printf("%d extent %.4f %.4f %.4f\n", idx, extent.x, extent.y);
-	}
+	// if (idx % 32 == 0) {
+    //     printf("%d center %.4f %.4f\n", idx, center.x, center.y);
+    //     printf("%d extent %.4f %.4f %.4f\n", idx, extent.x, extent.y);
+	// }
 }
 
 // Main rasterization method. Collaboratively works on one tile per
@@ -328,7 +328,7 @@ renderCUDA(
 			
 			// add low pass filter according to Botsch et al. [2005]. 
 			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
-			float rho2d = FilterSize * (d.x * d.x + d.y * d.y); // screen distance
+			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); // screen distance
 			float rho = min(rho3d, rho2d);
 			
 			// compute accurate depth when necessary
