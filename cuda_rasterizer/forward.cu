@@ -322,9 +322,9 @@ renderCUDA(
 			// compute two planes intersection as the ray intersection
 			float3 k = {-Tu.x + pixf.x * Tw.x, -Tu.y + pixf.x * Tw.y, -Tu.z + pixf.x * Tw.z};
 			float3 l = {-Tv.x + pixf.y * Tw.x, -Tv.y + pixf.y * Tw.y, -Tv.z + pixf.y * Tw.z};
-			float2 s = {(l.z * k.y - k.z * l.y), (l.z * k.x - k.z * l.x)};
 			float inv_norm = 1.0f / (k.x * l.y - k.y * l.x);
-			float rho3d = (s.x * s.x + s.y * s.y) * inv_norm * inv_norm; // splat distance
+			float2 s = {(l.z * k.y - k.z * l.y) * inv_norm, (l.z * k.x - k.z * l.x) * inv_norm};
+			float rho3d = (s.x * s.x + s.y * s.y); // splat distance
 			
 			// add low pass filter according to Botsch et al. [2005]. 
 			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
@@ -332,7 +332,7 @@ renderCUDA(
 			float rho = min(rho3d, rho2d);
 			
 			// compute accurate depth when necessary
-			float depth = (s.x * Tw.x + s.y * Tw.y) * inv_norm + Tw.z;
+			float depth = (s.x * Tw.x + s.y * Tw.y) + Tw.z;
 			float4 con_o = collected_conic_opacity[j];
 
 			float power = -0.5f * rho;

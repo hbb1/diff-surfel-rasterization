@@ -412,6 +412,7 @@ renderCUDA(
 	const uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ dL_dpixels,
 	const float* __restrict__ dL_depths,
+	float * __restrict__ dL_dcov3D,
 	float3* __restrict__ dL_dmean2D,
 	float4* __restrict__ dL_dconic2D,
 	float* __restrict__ dL_dopacity,
@@ -438,6 +439,9 @@ renderCUDA(
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
 	__shared__ float collected_colors[C * BLOCK_SIZE];
+	__shared__ float3 collected_Tu[BLOCK_SIZE];
+	__shared__ float3 collected_Tv[BLOCK_SIZE];
+	__shared__ float3 collected_Tw[BLOCK_SIZE];
 	// __shared__ float collected_depths[BLOCK_SIZE];
 
 	// In the forward, we stored the final value for T, the
@@ -452,12 +456,12 @@ renderCUDA(
 
 	float accum_rec[C] = { 0 };
 	float dL_dpixel[C];
-	float dL_depth;
+	float dL_ddepth;
 	float accum_depth_rec = 0;
 	if (inside){
 		for (int i = 0; i < C; i++)
 			dL_dpixel[i] = dL_dpixels[i * H * W + pix_id];
-	        dL_depth = dL_depths[pix_id];
+	        dL_ddepth = dL_depths[pix_id];
 	}
 
 	float last_alpha = 0;
@@ -482,9 +486,12 @@ renderCUDA(
 			collected_id[block.thread_rank()] = coll_id;
 			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
 			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
+			collected_Tu[block.thread_rank()] = {cov3Ds[9 * coll_id+0], cov3Ds[9 * coll_id+1], cov3Ds[9 * coll_id+2]};
+			collected_Tv[block.thread_rank()] = {cov3Ds[9 * coll_id+3], cov3Ds[9 * coll_id+4], cov3Ds[9 * coll_id+5]};
+			collected_Tw[block.thread_rank()] = {cov3Ds[9 * coll_id+6], cov3Ds[9 * coll_id+7], cov3Ds[9 * coll_id+8]};
 			for (int i = 0; i < C; i++)
 				collected_colors[i * BLOCK_SIZE + block.thread_rank()] = colors[coll_id * C + i];
-		        collected_depths[block.thread_rank()] = depths[coll_id];
+		        // collected_depths[block.thread_rank()] = depths[coll_id];
 		}
 		block.sync();
 
@@ -497,11 +504,28 @@ renderCUDA(
 			if (contributor >= last_contributor)
 				continue;
 
-			// Compute blending values, as before.
-			const float2 xy = collected_xy[j];
-			const float2 d = { xy.x - pixf.x, xy.y - pixf.y };
-			const float4 con_o = collected_conic_opacity[j];
-			const float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;
+			// compute ray-splat intersection as before
+			float2 xy = collected_xy[j];
+            float3 Tu = collected_Tu[j];
+            float3 Tv = collected_Tv[j];
+            float3 Tw = collected_Tw[j];
+			// compute two planes intersection as the ray intersection
+			float3 k = {-Tu.x + pixf.x * Tw.x, -Tu.y + pixf.x * Tw.y, -Tu.z + pixf.x * Tw.z};
+			float3 l = {-Tv.x + pixf.y * Tw.x, -Tv.y + pixf.y * Tw.y, -Tv.z + pixf.y * Tw.z};
+			float inv_norm = 1.0f / (k.x * l.y - k.y * l.x);
+			float2 s = {(l.z * k.y - k.z * l.y) * inv_norm, (l.z * k.x - k.z * l.x) * inv_norm};
+			float rho3d = (s.x * s.x + s.y * s.y); // splat distance
+			
+			// add low pass filter according to Botsch et al. [2005]. 
+			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
+			float rho2d = d.x * d.x + d.y * d.y; // screen distance
+			float rho = min(rho3d, rho2d);
+			
+			// compute accurate depth when necessary
+			float c_d = (s.x * Tw.x + s.y * Tw.y) + Tw.z;
+			float4 con_o = collected_conic_opacity[j];
+
+			float power = -0.5f * rho;
 			if (power > 0.0f)
 				continue;
 
@@ -532,10 +556,10 @@ renderCUDA(
 				// many that were affected by this Gaussian.
 				atomicAdd(&(dL_dcolors[global_id * C + ch]), dchannel_dcolor * dL_dchannel);
 			}
-			const float c_d = collected_depths[j];
+
 			accum_depth_rec = last_alpha * last_depth + (1.f - last_alpha) * accum_depth_rec;
 			last_depth = c_d;
-			dL_dalpha += (c_d - accum_depth_rec) * dL_depth;
+			dL_dalpha += (c_d - accum_depth_rec) * dL_ddepth;
 			dL_dalpha *= T;
 			// Update last alpha (to be used in the next iteration)
 			last_alpha = alpha;
@@ -550,19 +574,96 @@ renderCUDA(
 
 			// Helpful reusable temporary variables
 			const float dL_dG = con_o.w * dL_dalpha;
-			const float gdx = G * d.x;
-			const float gdy = G * d.y;
-			const float dG_ddelx = -gdx * con_o.x - gdy * con_o.y;
-			const float dG_ddely = -gdy * con_o.z - gdx * con_o.y;
+			if (rho3d <= rho2d) {
+				// Update gradients w.r.t. covariance of Gaussian 3x3 (T)
+				float2 dL_ds = {
+					dL_dG * -G * s.x + dL_ddepth * Tw.x,
+					dL_dG * -G * s.y + dL_ddepth * Tw.y
+				};
+
+				float3 ddepth_dTw = {s.x, s.y, 1.0};
+				
+				float dsx_dnorm = s.x * (-inv_norm);
+				float dsy_dnorm = s.y * (-inv_norm);
+				float3 dnorm_dk = {l.y, -l.x, 0.0};
+				float3 dnorm_dl = {-k.y, k.x, 0.0};
+
+				// can be optimized but factor out inv_norm
+				float3 dsx_dk = {0.0 * inv_norm + dsx_dnorm * dnorm_dk.x, l.z * inv_norm + dsx_dnorm * dnorm_dk.y, -l.y * inv_norm + dsx_dnorm * dnorm_dk.z};
+				float3 dsy_dk = {l.z * inv_norm + dsy_dnorm * dnorm_dk.x, 0.0 * inv_norm + dsy_dnorm * dnorm_dk.y, -l.x * inv_norm + dsy_dnorm * dnorm_dk.z};
+				float3 dsx_dl = {0.0 * inv_norm + dsx_dnorm * dnorm_dl.x, -k.z * inv_norm + dsx_dnorm * dnorm_dl.y, k.y * inv_norm + dsx_dnorm * dnorm_dl.z};
+				float3 dsy_dl = {-k.z * inv_norm + dsy_dnorm * dnorm_dl.x, 0.0 * inv_norm + dsy_dnorm * dnorm_dl.y, k.x * inv_norm + dsy_dnorm * dnorm_dl.z};
+
+				float3 dL_dk = {
+					dL_ds.x * dsx_dk.x + dL_ds.y * dsy_dk.x, 
+					dL_ds.x * dsx_dk.y + dL_ds.y * dsy_dk.y, 
+					dL_ds.x * dsx_dk.z + dL_ds.y * dsy_dk.z, 
+				};
+
+				float3 dL_dl = {
+					dL_ds.x * dsx_dl.x + dL_ds.y * dsy_dl.x, 
+					dL_ds.x * dsx_dl.y + dL_ds.y * dsy_dl.y, 
+					dL_ds.x * dsx_dl.z + dL_ds.y * dsy_dl.z, 
+				};
+
+				float3 dL_dTu = {-dL_dk.x, -dL_dk.y, -dL_dk.z};
+				float3 dL_dTv = {-dL_dl.x, -dL_dl.y, -dL_dl.z};
+				float3 dL_dTw = {
+					pixf.x * dL_dk.x + pixf.y * dL_dl.x + dL_ddepth * ddepth_dTw.x, 
+					pixf.x * dL_dk.y + pixf.y * dL_dl.y + dL_ddepth * ddepth_dTw.y, 
+					pixf.x * dL_dk.z + pixf.y * dL_dl.z + dL_ddepth * ddepth_dTw.z};
+
+
+				// Update gradients w.r.t. 3D covariance (3x3 matrix)
+				atomicAdd(&dL_dcov3D[global_id + 0],  dL_dTu.x);
+				atomicAdd(&dL_dcov3D[global_id + 1],  dL_dTu.y);
+				atomicAdd(&dL_dcov3D[global_id + 2],  dL_dTu.z);
+				atomicAdd(&dL_dcov3D[global_id + 3],  dL_dTv.x);
+				atomicAdd(&dL_dcov3D[global_id + 4],  dL_dTv.y);
+				atomicAdd(&dL_dcov3D[global_id + 5],  dL_dTv.z);
+				atomicAdd(&dL_dcov3D[global_id + 6],  dL_dTw.x);
+				atomicAdd(&dL_dcov3D[global_id + 7],  dL_dTw.y);
+				atomicAdd(&dL_dcov3D[global_id + 8],  dL_dTw.z);
+
+				// for testing the correctness of gradients
+				// if (global_id == 0 && pix.x == 0 && pix.y == H / 2) {
+				// 	printf("%d pix (%.4f %.4f)\n", global_id, pixf.x, pixf.y);
+				// 	printf("%d G %.4f\n", global_id, G);
+				// 	printf("%d depth %.8f\n", global_id, c_d);
+				// 	// printf("%d rho3d %.8f\n", global_id, rho3d);
+				// 	printf("%d dL_dG %.8f\n", global_id, dL_dG);
+				// 	printf("%d dL_dddepth %.8f\n", global_id, dL_ddepth);
+				// 	printf("%d Tu %.8f %.8f %.8f\n", global_id, Tu.x, Tu.y, Tu.z);
+				// 	printf("%d Tv %.8f %.8f %.8f\n", global_id, Tv.x, Tv.y, Tv.z);
+				// 	printf("%d Tw %.8f %.8f %.8f\n", global_id, Tw.x, Tw.y, Tw.z);
+        		// 	printf("%d dL_dTu %.8f %.8f %.8f\n", global_id, dL_dTu.x, dL_dTu.y, dL_dTu.z);
+				// 	printf("%d dL_dTv %.8f %.8f %.8f\n", global_id, dL_dTv.x, dL_dTv.y, dL_dTv.z);
+				// 	printf("%d dL_dTw %.8f %.8f %.8f\n", global_id, dL_dTw.x, dL_dTw.y, dL_dTw.z);
+				// }
+
+			} else {
+				// // Update gradients w.r.t. center of Gaussian 2D mean position
+				float dG_ddelx = -G * d.x;
+				float dG_ddely = -G * d.y;
+				atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx); // not scaled
+				atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely); // not scaled
+				// atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx * ddelx_dx);
+				// atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely * ddely_dy);
+			}
+
+			// const float gdx = G * d.x;
+			// const float gdy = G * d.y;
+			// const float dG_ddelx = -gdx * con_o.x - gdy * con_o.y;
+			// const float dG_ddely = -gdy * con_o.z - gdx * con_o.y;
 
 			// Update gradients w.r.t. 2D mean position of the Gaussian
-			atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx * ddelx_dx);
-			atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely * ddely_dy);
+			// atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx * ddelx_dx);
+			// atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely * ddely_dy);
 
 			// Update gradients w.r.t. 2D covariance (2x2 matrix, symmetric)
-			atomicAdd(&dL_dconic2D[global_id].x, -0.5f * gdx * d.x * dL_dG);
-			atomicAdd(&dL_dconic2D[global_id].y, -0.5f * gdx * d.y * dL_dG);
-			atomicAdd(&dL_dconic2D[global_id].w, -0.5f * gdy * d.y * dL_dG);
+			// atomicAdd(&dL_dconic2D[global_id].x, -0.5f * gdx * d.x * dL_dG);
+			// atomicAdd(&dL_dconic2D[global_id].y, -0.5f * gdx * d.y * dL_dG);
+			// atomicAdd(&dL_dconic2D[global_id].w, -0.5f * gdy * d.y * dL_dG);
 
 			// Update gradients w.r.t. opacity of the Gaussian
 			atomicAdd(&(dL_dopacity[global_id]), G * dL_dalpha);
@@ -634,7 +735,7 @@ __global__ void computeConic2D(int P,
     float cx = (B * E  - C * D) * inv_det;
     float cy = (B * D  - A * E) * inv_det;
     const float isoval = (F - D * cx - E * cy);
-	float inv_iso = FG / isoval;
+	float inv_iso = 1.0 / isoval;
 
 	// compute the gradient with respect to the original conic
 	const float3 conic_in = {A * inv_iso, B * inv_iso, C * inv_iso};
@@ -643,7 +744,7 @@ __global__ void computeConic2D(int P,
 	// normalized notice that iso is differentiable with respect to cov3d
 	float3 dL_dconic2 = {dL_dconic.x * inv_iso, dL_dconic.y * inv_iso, dL_dconic.z * inv_iso};
 	float dL_dinv = (dL_dconic.x * A + dL_dconic.y * B + dL_dconic.z * C);
-	float dL_diso = dL_dinv * (inv_iso * inv_iso) / (-FG);
+	float dL_diso = dL_dinv * (inv_iso * inv_iso) / (-1.0);
 	
 	// dL_dconic w.r.t center iso 
 	float dcx_ddelta = (B * E - C * D) * (-inv_det * inv_det);
@@ -924,6 +1025,7 @@ void BACKWARD::render(
 	const uint32_t* n_contrib,
 	const float* dL_dpixels,
 	const float* dL_depths,
+	float * dL_dcov3D,
 	float3* dL_dmean2D,
 	float4* dL_dconic2D,
 	float* dL_dopacity,
@@ -943,6 +1045,7 @@ void BACKWARD::render(
 		n_contrib,
 		dL_dpixels,
 		dL_depths,
+		dL_dcov3D,
 		dL_dmean2D,
 		dL_dconic2D,
 		dL_dopacity,
