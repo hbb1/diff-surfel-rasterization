@@ -328,7 +328,7 @@ renderCUDA(
 			
 			// add low pass filter according to Botsch et al. [2005]. 
 			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
-			float rho2d = d.x * d.x + d.y * d.y; // screen distance
+			float rho2d = FilterSize * (d.x * d.x + d.y * d.y); // screen distance
 			float rho = min(rho3d, rho2d);
 			
 			// compute accurate depth when necessary

@@ -518,7 +518,7 @@ renderCUDA(
 			
 			// add low pass filter according to Botsch et al. [2005]. 
 			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
-			float rho2d = d.x * d.x + d.y * d.y; // screen distance
+			float rho2d = FilterSize * (d.x * d.x + d.y * d.y); // screen distance
 			float rho = min(rho3d, rho2d);
 			
 			// compute accurate depth when necessary
@@ -643,12 +643,10 @@ renderCUDA(
 
 			} else {
 				// // Update gradients w.r.t. center of Gaussian 2D mean position
-				float dG_ddelx = -G * d.x;
-				float dG_ddely = -G * d.y;
+				float dG_ddelx = -G * FilterSize * d.x;
+				float dG_ddely = -G * FilterSize * d.y;
 				atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx); // not scaled
 				atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely); // not scaled
-				// atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx * ddelx_dx);
-				// atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely * ddely_dy);
 			}
 
 			// const float gdx = G * d.x;
