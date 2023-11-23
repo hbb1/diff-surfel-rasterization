@@ -24,6 +24,10 @@
 #include <string>
 #include <functional>
 
+#define CHECK_INPUT(x)											\               
+    AT_ASSERTM(x.type().is_cuda(), #x " must be a CUDA tensor")
+    // AT_ASSERTM(x.is_contiguous(), #x " must be contiguous")
+
 std::function<char*(size_t N)> resizeFunctional(torch::Tensor& t) {
     auto lambda = [&t](size_t N) {
         t.resize_({(long long)N});
@@ -61,6 +65,18 @@ RasterizeGaussiansCUDA(
   const int P = means3D.size(0);
   const int H = image_height;
   const int W = image_width;
+
+  CHECK_INPUT(background);
+  CHECK_INPUT(means3D);
+  CHECK_INPUT(colors);
+  CHECK_INPUT(opacity);
+  CHECK_INPUT(scales);
+  CHECK_INPUT(rotations);
+  CHECK_INPUT(cov3D_precomp);
+  CHECK_INPUT(viewmatrix);
+  CHECK_INPUT(projmatrix);
+  CHECK_INPUT(sh);
+  CHECK_INPUT(campos);
 
   auto int_opts = means3D.options().dtype(torch::kInt32);
   auto float_opts = means3D.options().dtype(torch::kFloat32);

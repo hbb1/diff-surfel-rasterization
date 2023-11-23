@@ -91,7 +91,9 @@ __device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, co
     glm::mat3 R = quat_to_rotmat(quat) * scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
 	glm::mat3 M = glm::mat3(W * R[0], W * R[1], W * p_world + cam_pos);
 	// don't draw if the matrix is singular
-	if (glm::determinant(M) == 0.0f) return false;
+	// if (glm::determinant(M) == 0.0f) return false;
+	// back face culling ? or parallel face culling?
+	if (glm::dot(W*R[2], M[2]) == 0.0f) return false;
 
 	glm::mat4x3 T = glm::transpose(P * glm::mat3x4(
 		glm::vec4(M[0], 0.0),
@@ -275,9 +277,9 @@ renderCUDA(
 	__shared__ int collected_id[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
-	__shared__ float3 collected_Tu[BLOCK_SIZE];
-	__shared__ float3 collected_Tv[BLOCK_SIZE];
-	__shared__ float3 collected_Tw[BLOCK_SIZE];
+	// __shared__ float3 collected_Tu[BLOCK_SIZE];
+	// __shared__ float3 collected_Tv[BLOCK_SIZE];
+	// __shared__ float3 collected_Tw[BLOCK_SIZE];
 
 	// Initialize helper variables
 	float T = 1.0f;
@@ -322,6 +324,9 @@ renderCUDA(
 			// compute two planes intersection as the ray intersection
 			float3 k = {-Tu.x + pixf.x * Tw.x, -Tu.y + pixf.x * Tw.y, -Tu.z + pixf.x * Tw.z};
 			float3 l = {-Tv.x + pixf.y * Tw.x, -Tv.y + pixf.y * Tw.y, -Tv.z + pixf.y * Tw.z};
+
+			if ((k.x * l.y - k.y * l.x) == 0.0f) continue;
+
 			float inv_norm = 1.0f / (k.x * l.y - k.y * l.x);
 			float2 s = {(l.z * k.y - k.z * l.y) * inv_norm, -(l.z * k.x - k.z * l.x) * inv_norm};
 			float rho3d = (s.x * s.x + s.y * s.y); // splat distance
@@ -332,7 +337,8 @@ renderCUDA(
 			float rho = min(rho3d, rho2d);
 			
 			// compute accurate depth when necessary
-			float depth = (s.x * Tw.x + s.y * Tw.y) + Tw.z;
+			// float depth = (s.x * Tw.x + s.y * Tw.y) + Tw.z;
+			float depth = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z;
 			float4 con_o = collected_conic_opacity[j];
 
 			float power = -0.5f * rho;
