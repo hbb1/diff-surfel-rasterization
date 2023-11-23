@@ -196,16 +196,16 @@ class GaussianRasterizer(nn.Module):
             raise Exception('Please provide exactly one of either scale/rotation pair or precomputed 3D covariance!')
         
         if shs is None:
-            shs = torch.Tensor([])
+            shs = torch.Tensor([]).cuda()
         if colors_precomp is None:
-            colors_precomp = torch.Tensor([])
+            colors_precomp = torch.Tensor([]).cuda()
 
         if scales is None:
-            scales = torch.Tensor([])
+            scales = torch.Tensor([]).cuda()
         if rotations is None:
-            rotations = torch.Tensor([])
+            rotations = torch.Tensor([]).cuda()
         if cov3D_precomp is None:
-            cov3D_precomp = torch.Tensor([])
+            cov3D_precomp = torch.Tensor([]).cuda()
 
         # Invoke C++/CUDA rasterization routine
         return rasterize_gaussians(

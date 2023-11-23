@@ -277,9 +277,9 @@ renderCUDA(
 	__shared__ int collected_id[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
-	// __shared__ float3 collected_Tu[BLOCK_SIZE];
-	// __shared__ float3 collected_Tv[BLOCK_SIZE];
-	// __shared__ float3 collected_Tw[BLOCK_SIZE];
+	__shared__ float3 collected_Tu[BLOCK_SIZE];
+	__shared__ float3 collected_Tv[BLOCK_SIZE];
+	__shared__ float3 collected_Tw[BLOCK_SIZE];
 
 	// Initialize helper variables
 	float T = 1.0f;
