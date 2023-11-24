@@ -157,6 +157,22 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	const torch::Tensor& imageBuffer,
 	const bool debug) 
 {
+
+	CHECK_INPUT(background);
+  CHECK_INPUT(means3D);
+  CHECK_INPUT(radii);
+  CHECK_INPUT(colors);
+  CHECK_INPUT(scales);
+  CHECK_INPUT(rotations);
+  CHECK_INPUT(cov3D_precomp);
+  CHECK_INPUT(viewmatrix);
+  CHECK_INPUT(projmatrix);
+  CHECK_INPUT(sh);
+  CHECK_INPUT(campos);
+  CHECK_INPUT(binningBuffer);
+  CHECK_INPUT(imageBuffer);
+  CHECK_INPUT(geomBuffer);
+
   const int P = means3D.size(0);
   const int H = dL_dout_color.size(1);
   const int W = dL_dout_color.size(2);
@@ -172,7 +188,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
   torch::Tensor dL_dcolors = torch::zeros({P, NUM_CHANNELS}, means3D.options());
   torch::Tensor dL_dconic = torch::zeros({P, 2, 2}, means3D.options());
   torch::Tensor dL_dopacity = torch::zeros({P, 1}, means3D.options());
-  torch::Tensor dL_dcov3D = torch::zeros({P, 6}, means3D.options());
+  torch::Tensor dL_dcov3D = torch::zeros({P, 9}, means3D.options());
   torch::Tensor dL_dsh = torch::zeros({P, M, 3}, means3D.options());
   torch::Tensor dL_dscales = torch::zeros({P, 3}, means3D.options());
   torch::Tensor dL_drotations = torch::zeros({P, 4}, means3D.options());

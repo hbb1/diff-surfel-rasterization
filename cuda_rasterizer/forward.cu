@@ -113,7 +113,7 @@ __device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, co
 	return true;
 }
 
-__device__ void computeCenter(const float *cov3D, float2 & center, float2 & extent) {
+__device__ bool computeCenter(const float *cov3D, float2 & center, float2 & extent) {
 	glm::mat4x3 T = glm::mat4x3(
 		cov3D[0], cov3D[1], cov3D[2],
 		cov3D[3], cov3D[4], cov3D[5],
@@ -122,6 +122,9 @@ __device__ void computeCenter(const float *cov3D, float2 & center, float2 & exte
 	);
 
 	float d = glm::dot(glm::vec3(1.0, 1.0, -1.0), T[3] * T[3]);
+	
+	if (d == 0.0f) return false;
+
 	glm::vec3 f = glm::vec3(1.0, 1.0, -1.0) * (1.0f / d);
 
 	glm::vec3 p = glm::vec3(
@@ -139,6 +142,7 @@ __device__ void computeCenter(const float *cov3D, float2 & center, float2 & exte
 	glm::vec3 h = sqrt(max(glm::vec3(0.0), h0)) + glm::vec3(0.0, 0.0, 1e-2);
 	center = {p.x, p.y};
 	extent = {h.x, h.y};
+	return true;
 }
 
 // Perform initial steps for each Gaussian prior to rasterization.
@@ -189,13 +193,13 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	
 	// view frustum cullling TODO
 	const float* cov3D;
+	bool ok;
 	if (cov3D_precomp != nullptr)
 	{
 		cov3D = cov3D_precomp + idx * 9;
 	}
 	else
 	{
-		bool ok;
 		ok = computeCov3D(p_world, quat, scale, viewmatrix, intrins, cov3Ds + idx * 9);
 		if (!ok) return;
 		cov3D = cov3Ds + idx * 9;
@@ -204,10 +208,11 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	//  compute center and extent
     float2 center;
     float2 extent;
-	computeCenter(cov3D, center, extent);
+	ok = computeCenter(cov3D, center, extent);
+	if (!ok) return;
 
 	// add the bounding of countour
-	float radius = ceil(3.f * max(extent.x, extent.y));
+	float radius = ceil(3.f * max(max(extent.x, extent.y), FilterSize));
 	uint2 rect_min, rect_max;
 	getRect(center, radius, rect_min, rect_max, grid);
 	if ((rect_max.x - rect_min.x) * (rect_max.y - rect_min.y) == 0)
