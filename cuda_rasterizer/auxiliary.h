@@ -17,7 +17,7 @@
 
 #define BLOCK_SIZE (BLOCK_X * BLOCK_Y)
 #define NUM_WARPS (BLOCK_SIZE/32)
-#define FilterSize 0.3f
+#define FilterSize 0.47140452079103173 // sqrt(2) / 3
 #define FilterInvSquare 1/(FilterSize*FilterSize)
 
 // Spherical harmonics coefficients

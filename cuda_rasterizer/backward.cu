@@ -373,36 +373,6 @@ renderCUDA(
 				atomicAdd(&dL_dcov3D[global_id * 9 + 7],  dL_dTw.y);
 				atomicAdd(&dL_dcov3D[global_id * 9 + 8],  dL_dTw.z);
 
-
-				if (isnan(dL_dTu.x) ||
-					isnan(dL_dTu.y) || 
-					isnan(dL_dTu.z) || 
-					isnan(dL_dTv.x) ||
-					isnan(dL_dTv.y) || 
-					isnan(dL_dTv.z) || 
-					isnan(dL_dTw.x) || 
-					isnan(dL_dTw.y) ||
-					isnan(dL_dTw.z)) {
-					if (global_id == 404 && pix.x == 83 && pix.y == 84) {
-						// printf("%d \t", global_id);
-						printf("%d depth %.8f\n", global_id, c_d);
-						printf("%d pix (%.4f %.4f)\n", global_id, pixf.x, pixf.y);
-						printf("%d G %.4f\n", global_id, G);
-						printf("%d depth %.8f\n", global_id, c_d);
-						printf("%d rho3d %.8f\n", global_id, rho3d);
-						printf("%d dL_dG %.8f\n", global_id, dL_dG);
-						printf("%d dL_dddepth %.8f\n", global_id, dL_ddepth);
-						printf("%d Tu %.8f %.8f %.8f\n", global_id, Tu.x, Tu.y, Tu.z);
-						printf("%d Tv %.8f %.8f %.8f\n", global_id, Tv.x, Tv.y, Tv.z);
-						printf("%d Tw %.8f %.8f %.8f\n", global_id, Tw.x, Tw.y, Tw.z);
-						printf("%d dL_dTu %.8f %.8f %.8f\n", global_id, dL_dTu.x, dL_dTu.y, dL_dTu.z);
-						printf("%d dL_dTv %.8f %.8f %.8f\n", global_id, dL_dTv.x, dL_dTv.y, dL_dTv.z);
-						printf("%d dL_dTw %.8f %.8f %.8f\n", global_id, dL_dTw.x, dL_dTw.y, dL_dTw.z);
-					}
-					// printf("%d dL_dTu %.8f %.8f %.8f\n", idx, dL_dcov3D[0], dL_dcov3D[1], dL_dcov3D[2]);
-					// printf("%d dL_dTv %.8f %.8f %.8f\n", idx, dL_dcov3D[3], dL_dcov3D[4], dL_dcov3D[5]);
-					// printf("%d dL_dTw %.8f %.8f %.8f\n", idx, dL_dcov3D[6], dL_dcov3D[7], dL_dcov3D[8]);
-				}
 				// __syncthreads();
 				// for testing the correctness of gradients
 				// if (global_id == 0 && pix.x == 0 && pix.y == H / 2) {
@@ -554,22 +524,6 @@ __global__ void preprocessCUDA(
 	const float* dL_dcov3D = &(dL_dcov3Ds[9 * idx]);
 	glm::vec3 p_world = glm::vec3(means3D[idx].x, means3D[idx].y, means3D[idx].z);
 	float4 intrins = {focal_x, focal_y, focal_x * tan_fovx, focal_y * tan_fovy};
-	
-	if (isnan(dL_dcov3D[0]) || 
-		isnan(dL_dcov3D[1]) || 
-		isnan(dL_dcov3D[2]) || 
-		isnan(dL_dcov3D[3]) || 
-		isnan(dL_dcov3D[4]) || 
-		isnan(dL_dcov3D[5]) || 
-		isnan(dL_dcov3D[6]) || 
-		isnan(dL_dcov3D[7]) ||
-		isnan(dL_dcov3D[8])) {
-		if (idx == -1) printf("%d \t", idx);
-		// printf("%d dL_dTu %.8f %.8f %.8f\n", idx, dL_dcov3D[0], dL_dcov3D[1], dL_dcov3D[2]);
-		// printf("%d dL_dTv %.8f %.8f %.8f\n", idx, dL_dcov3D[3], dL_dcov3D[4], dL_dcov3D[5]);
-		// printf("%d dL_dTw %.8f %.8f %.8f\n", idx, dL_dcov3D[6], dL_dcov3D[7], dL_dcov3D[8]);
-	}
-
 
 	glm::vec3 dL_dmean3D;
 	glm::vec3 dL_dscale;
