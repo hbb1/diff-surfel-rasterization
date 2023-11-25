@@ -180,7 +180,7 @@ renderCUDA(
 	int toDo = range.y - range.x;
 
 	__shared__ int collected_id[BLOCK_SIZE];
-	__shared__ float2 collected_xy[BLOCK_SIZE];
+	// __shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
 	__shared__ float collected_colors[C * BLOCK_SIZE];
 	__shared__ float3 collected_Tu[BLOCK_SIZE];
@@ -228,7 +228,7 @@ renderCUDA(
 		{
 			const int coll_id = point_list[range.y - progress - 1];
 			collected_id[block.thread_rank()] = coll_id;
-			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
+			// collected_xy[block.thread_rank()] = points_xy_image[coll_id];
 			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
 			collected_Tu[block.thread_rank()] = {cov3Ds[9 * coll_id+0], cov3Ds[9 * coll_id+1], cov3Ds[9 * coll_id+2]};
 			collected_Tv[block.thread_rank()] = {cov3Ds[9 * coll_id+3], cov3Ds[9 * coll_id+4], cov3Ds[9 * coll_id+5]};
@@ -249,7 +249,7 @@ renderCUDA(
 				continue;
 
 			// compute ray-splat intersection as before
-			float2 xy = collected_xy[j];
+			// float2 xy = collected_xy[j];
             float3 Tu = collected_Tu[j];
             float3 Tv = collected_Tv[j];
             float3 Tw = collected_Tw[j];
@@ -263,7 +263,8 @@ renderCUDA(
 			float2 s = {(l.z * k.y - k.z * l.y) * inv_norm, -(l.z * k.x - k.z * l.x) * inv_norm};
 			float rho3d = (s.x * s.x + s.y * s.y); // splat distance
 			
-			// add low pass filter according to Botsch et al. [2005]. 
+			// add low pass filter according to Botsch et al. [2005].
+			float2 xy = {Tu.z / Tw.z, Tv.z / Tw.z};
 			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
 			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); // screen distance
 			float rho = min(rho3d, rho2d);
@@ -394,9 +395,15 @@ renderCUDA(
 				// // Update gradients w.r.t. center of Gaussian 2D mean position
 				float dG_ddelx = -G * FilterInvSquare * d.x;
 				float dG_ddely = -G * FilterInvSquare * d.y;
-				atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx); // not scaled
-				atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely); // not scaled
-				atomicAdd(&dL_dcov3D[global_id * 9 + 8],  dL_ddepth); // propagate depth loss
+				// atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx); // not scaled
+				// atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely); // not scaled
+				float inv_Twz = 1 / Tw.z;
+				float dL_dTuz = dL_dG * dG_ddelx * inv_Twz;
+				float dL_dTvz = dL_dG * dG_ddely * inv_Twz;
+				float dL_dTwz = dL_dG * dG_ddelx * (-Tu.z * inv_Twz * inv_Twz) + dL_dG * dG_ddely * (-Tv.z * inv_Twz * inv_Twz) + dL_ddepth; // add depth loss here
+				atomicAdd(&dL_dcov3D[global_id * 9 + 2],  dL_dTuz); // propagate loss
+				atomicAdd(&dL_dcov3D[global_id * 9 + 5],  dL_dTvz); // propagate loss
+				atomicAdd(&dL_dcov3D[global_id * 9 + 8],  dL_dTwz); // propagate loss
 			}
 
 			// Update gradients w.r.t. opacity of the Gaussian
@@ -634,13 +641,15 @@ void BACKWARD::preprocess(
 	// "preprocess". When done, loss gradient w.r.t. 3D means has been
 	// modified and gradient w.r.t. 3D covariance matrix has been computed.	
 	// propagate gradients to cov3D
-	computeCenter << <(P + 255) / 256, 256 >> >(
-		P, 
-		radii,
-    	cov3Ds,
-    	dL_dconics,
-    	dL_dmean2Ds,
-    	dL_dcov3Ds);
+
+	// we do not use the center actually
+	// computeCenter << <(P + 255) / 256, 256 >> >(
+	// 	P, 
+	// 	radii,
+    // 	cov3Ds,
+    // 	dL_dconics,
+    // 	dL_dmean2Ds,
+    // 	dL_dcov3Ds);
 	
 	// propagate gradients from cov3d to mean3d, scale, rot, sh, color
 	preprocessCUDA<NUM_CHANNELS><< <(P + 255) / 256, 256 >> > (
