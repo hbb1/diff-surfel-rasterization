@@ -57,7 +57,8 @@
         "concepts": "cpp",
         "string_view": "cpp",
         "valarray": "cpp",
-        "__locale": "cpp"
+        "__locale": "cpp",
+        "semaphore": "cpp"
     },
     "cmake.configureOnOpen": false,
     "C_Cpp.errorSquiggles": "disabled"

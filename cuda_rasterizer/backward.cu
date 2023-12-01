@@ -201,11 +201,14 @@ renderCUDA(
 	float accum_rec[C] = { 0 };
 	float dL_dpixel[C];
 	float dL_ddepth;
+	float dL_daccum;
 	float accum_depth_rec = 0;
+	float accum_alpha_rec = 0;
 	if (inside){
 		for (int i = 0; i < C; i++)
 			dL_dpixel[i] = dL_dpixels[i * H * W + pix_id];
 	        dL_ddepth = dL_depths[pix_id];
+			dL_daccum = dL_depths[H * W + pix_id];
 	}
 
 	float last_alpha = 0;
@@ -309,6 +312,10 @@ renderCUDA(
 			accum_depth_rec = last_alpha * last_depth + (1.f - last_alpha) * accum_depth_rec;
 			last_depth = c_d;
 			dL_dalpha += (c_d - accum_depth_rec) * dL_ddepth;
+			
+			accum_alpha_rec = last_alpha * 1.0 + (1.f - last_alpha) * accum_alpha_rec;
+			dL_dalpha += (1 - accum_alpha_rec) * dL_daccum;
+			
 			dL_dalpha *= T;
 			// Update last alpha (to be used in the next iteration)
 			last_alpha = alpha;
