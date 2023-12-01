@@ -293,6 +293,10 @@ renderCUDA(
 	float C[CHANNELS] = { 0 };
 	float D = { 0 };
 
+#ifdef REG
+	float distortion = 0;
+#endif
+
 	// Iterate over batches until all done or range is complete
 	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
 	{
@@ -371,6 +375,12 @@ renderCUDA(
 				C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
 			D += depth * alpha * T;
 
+#ifdef REG
+			// the first point always has zeros energy
+			float weight = alpha * T;
+			float acc_weight = 1.0f-test_T;
+			distortion += 2.0f * weight * abs(depth * acc_weight - D);
+#endif
 			T = test_T;
 
 			// Keep track of last range entry to update this
@@ -389,6 +399,9 @@ renderCUDA(
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
 		out_depth[pix_id] = D;
 		out_depth[pix_id + H * W] = 1 - T;
+#ifdef REG
+		out_depth[pix_id + 2 * H * W] = distortion;
+#endif
 	}
 }
 
