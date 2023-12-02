@@ -180,7 +180,7 @@ renderCUDA(
 	int toDo = range.y - range.x;
 
 	__shared__ int collected_id[BLOCK_SIZE];
-	// __shared__ float2 collected_xy[BLOCK_SIZE];
+	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
 	__shared__ float collected_colors[C * BLOCK_SIZE];
 	__shared__ float3 collected_Tu[BLOCK_SIZE];
@@ -231,7 +231,7 @@ renderCUDA(
 		{
 			const int coll_id = point_list[range.y - progress - 1];
 			collected_id[block.thread_rank()] = coll_id;
-			// collected_xy[block.thread_rank()] = points_xy_image[coll_id];
+			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
 			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
 			collected_Tu[block.thread_rank()] = {cov3Ds[9 * coll_id+0], cov3Ds[9 * coll_id+1], cov3Ds[9 * coll_id+2]};
 			collected_Tv[block.thread_rank()] = {cov3Ds[9 * coll_id+3], cov3Ds[9 * coll_id+4], cov3Ds[9 * coll_id+5]};
@@ -267,7 +267,8 @@ renderCUDA(
 			float rho3d = (s.x * s.x + s.y * s.y); // splat distance
 			
 			// add low pass filter according to Botsch et al. [2005].
-			float2 xy = {Tu.z / Tw.z, Tv.z / Tw.z};
+			// float2 xy = {Tu.z / Tw.z, Tv.z / Tw.z};
+			float2 xy = collected_xy[j];
 			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
 			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); // screen distance
 			float rho = min(rho3d, rho2d);
@@ -330,11 +331,12 @@ renderCUDA(
 
 			// Helpful reusable temporary variables
 			const float dL_dG = con_o.w * dL_dalpha;
+			float dL_dz = alpha * T * dL_ddepth; 
 			if (rho3d <= rho2d) {
 				// Update gradients w.r.t. covariance of Gaussian 3x3 (T)
 				float2 dL_ds = {
-					dL_dG * -G * s.x + dL_ddepth * Tw.x,
-					dL_dG * -G * s.y + dL_ddepth * Tw.y
+					dL_dG * -G * s.x + dL_dz * Tw.x,
+					dL_dG * -G * s.y + dL_dz * Tw.y
 				};
 
 				float3 ddepth_dTw = {s.x, s.y, 1.0};
@@ -365,9 +367,9 @@ renderCUDA(
 				float3 dL_dTu = {-dL_dk.x, -dL_dk.y, -dL_dk.z};
 				float3 dL_dTv = {-dL_dl.x, -dL_dl.y, -dL_dl.z};
 				float3 dL_dTw = {
-					pixf.x * dL_dk.x + pixf.y * dL_dl.x + dL_ddepth * ddepth_dTw.x, 
-					pixf.x * dL_dk.y + pixf.y * dL_dl.y + dL_ddepth * ddepth_dTw.y, 
-					pixf.x * dL_dk.z + pixf.y * dL_dl.z + dL_ddepth * ddepth_dTw.z};
+					pixf.x * dL_dk.x + pixf.y * dL_dl.x + dL_dz * ddepth_dTw.x, 
+					pixf.x * dL_dk.y + pixf.y * dL_dl.y + dL_dz * ddepth_dTw.y, 
+					pixf.x * dL_dk.z + pixf.y * dL_dl.z + dL_dz * ddepth_dTw.z};
 
 
 				// Update gradients w.r.t. 3D covariance (3x3 matrix)
@@ -404,13 +406,16 @@ renderCUDA(
 				float dG_ddely = -G * FilterInvSquare * d.y;
 				// atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx); // not scaled
 				// atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely); // not scaled
-				float inv_Twz = 1 / Tw.z;
-				float dL_dTuz = dL_dG * dG_ddelx * inv_Twz;
-				float dL_dTvz = dL_dG * dG_ddely * inv_Twz;
-				float dL_dTwz = dL_dG * dG_ddelx * (-Tu.z * inv_Twz * inv_Twz) + dL_dG * dG_ddely * (-Tv.z * inv_Twz * inv_Twz) + dL_ddepth; // add depth loss here
-				atomicAdd(&dL_dcov3D[global_id * 9 + 2],  dL_dTuz); // propagate loss
-				atomicAdd(&dL_dcov3D[global_id * 9 + 5],  dL_dTvz); // propagate loss
-				atomicAdd(&dL_dcov3D[global_id * 9 + 8],  dL_dTwz); // propagate loss
+				atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx); // not scaled
+				atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely); // not scaled
+				atomicAdd(&dL_dcov3D[global_id * 9 + 8],  dL_dz); // propagate depth loss
+				// float inv_Twz = 1 / Tw.z;
+				// float dL_dTuz = dL_dG * dG_ddelx * inv_Twz;
+				// float dL_dTvz = dL_dG * dG_ddely * inv_Twz;
+				// float dL_dTwz = dL_dG * dG_ddelx * (-Tu.z * inv_Twz * inv_Twz) + dL_dG * dG_ddely * (-Tv.z * inv_Twz * inv_Twz) + dL_ddepth; // add depth loss here
+				// atomicAdd(&dL_dcov3D[global_id * 9 + 2],  dL_dTuz); // propagate loss
+				// atomicAdd(&dL_dcov3D[global_id * 9 + 5],  dL_dTvz); // propagate loss
+				// atomicAdd(&dL_dcov3D[global_id * 9 + 8],  dL_dTwz); // propagate loss
 			}
 
 			// Update gradients w.r.t. opacity of the Gaussian
@@ -650,13 +655,13 @@ void BACKWARD::preprocess(
 	// propagate gradients to cov3D
 
 	// we do not use the center actually
-	// computeCenter << <(P + 255) / 256, 256 >> >(
-	// 	P, 
-	// 	radii,
-    // 	cov3Ds,
-    // 	dL_dconics,
-    // 	dL_dmean2Ds,
-    // 	dL_dcov3Ds);
+	computeCenter << <(P + 255) / 256, 256 >> >(
+		P, 
+		radii,
+    	cov3Ds,
+    	dL_dconics,
+    	dL_dmean2Ds,
+    	dL_dcov3Ds);
 	
 	// propagate gradients from cov3d to mean3d, scale, rot, sh, color
 	preprocessCUDA<NUM_CHANNELS><< <(P + 255) / 256, 256 >> > (
