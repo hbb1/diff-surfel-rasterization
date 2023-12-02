@@ -375,11 +375,11 @@ renderCUDA(
 				C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
 			D += depth * alpha * T;
 
-#ifdef REG
+#if REG
 			// the first point always has zeros energy
-			float weight = alpha * T;
-			float acc_weight = 1.0f-test_T;
-			distortion += 2.0f * weight * abs(depth * acc_weight - D);
+			// (accumulate depth) and (accumulate alpha * depth)
+			float error = 2.0f * abs(depth * (1-test_T) - D);
+			distortion +=  error * alpha * T;
 #endif
 			T = test_T;
 
@@ -400,6 +400,7 @@ renderCUDA(
 		out_depth[pix_id] = D;
 		out_depth[pix_id + H * W] = 1 - T;
 #ifdef REG
+		final_T[pix_id + H * W] = D;
 		out_depth[pix_id + 2 * H * W] = distortion;
 #endif
 	}

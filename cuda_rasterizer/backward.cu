@@ -204,11 +204,22 @@ renderCUDA(
 	float dL_daccum;
 	float accum_depth_rec = 0;
 	float accum_alpha_rec = 0;
+
+#if REG
+	float dL_dreg;
+	float accum_error_rec = 0;
+	float last_error = 0;
+	float D = inside ? final_Ts[pix_id + H * W] : 0;
+#endif
+
 	if (inside){
 		for (int i = 0; i < C; i++)
 			dL_dpixel[i] = dL_dpixels[i * H * W + pix_id];
 	        dL_ddepth = dL_depths[pix_id];
-			dL_daccum = dL_depths[H * W + pix_id];
+			dL_daccum = dL_depths[1 * H * W + pix_id];
+#if REG
+			dL_dreg = dL_depths[2 * H * W + pix_id];
+#endif
 	}
 
 	float last_alpha = 0;
@@ -310,6 +321,21 @@ renderCUDA(
 				atomicAdd(&(dL_dcolors[global_id * C + ch]), dchannel_dcolor * dL_dchannel);
 			}
 
+
+#if REG
+			float w = T * alpha;
+			float A = (1-T + w);
+			float error = 2.0f * abs(c_d * A - D);
+			float multiplier = c_d * A > D ? 1.0f : -1.0f;
+			accum_error_rec = last_alpha * last_error + (1.f - last_alpha) * accum_error_rec;
+			
+			dL_dalpha += (error - accum_error_rec) * dL_dreg;
+			dL_ddepth += w * (-1) * multiplier * dL_dreg;
+			dL_dalpha += w * c_d * multiplier * dL_dreg;
+			last_error = error;
+			D = D - T * alpha * c_d;
+#endif
+
 			accum_depth_rec = last_alpha * last_depth + (1.f - last_alpha) * accum_depth_rec;
 			last_depth = c_d;
 			dL_dalpha += (c_d - accum_depth_rec) * dL_ddepth;
@@ -332,6 +358,9 @@ renderCUDA(
 			// Helpful reusable temporary variables
 			const float dL_dG = con_o.w * dL_dalpha;
 			float dL_dz = alpha * T * dL_ddepth; 
+#if REG
+			dL_dz += A * multiplier * dL_dreg;
+#endif 
 			if (rho3d <= rho2d) {
 				// Update gradients w.r.t. covariance of Gaussian 3x3 (T)
 				float2 dL_ds = {
