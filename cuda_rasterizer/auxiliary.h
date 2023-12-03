@@ -18,9 +18,11 @@
 #define BLOCK_SIZE (BLOCK_X * BLOCK_Y)
 #define NUM_WARPS (BLOCK_SIZE/32)
 // #define FilterSize 0.47140452079103173  // sqrt(2) / 3
-#define FilterSize 0.707106 // * 0.5 // sqrt(2) / 2
+// #define FilterSize 0.33333 // * 0.5 // sqrt(2) / 2
+#define FilterSize 0.7071067811865476
 #define FilterInvSquare 1/(FilterSize*FilterSize)
 #define REG 1
+#define TIGHTBBOX 1
 
 // Spherical harmonics coefficients
 __device__ const float SH_C0 = 0.28209479177387814f;

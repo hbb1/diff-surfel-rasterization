@@ -212,7 +212,15 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	if (!ok) return;
 
 	// add the bounding of countour
-	float radius = ceil(3.f * max(max(extent.x, extent.y), FilterSize));
+#if TIGHTBBOX
+	// the effective extent is now depended on the opacity of gaussian.
+	float truncated_R = sqrtf(max(9.f + logf(opacities[idx]), 0.000001));
+	// if (truncated_R < 1.0) printf("%.2f\n", truncated_R);
+#else
+	float truncated_R = 3.f;
+#endif
+	float radius = ceil(truncated_R * max(max(extent.x, extent.y), FilterSize));
+
 	uint2 rect_min, rect_max;
 	getRect(center, radius, rect_min, rect_max, grid);
 	if ((rect_max.x - rect_min.x) * (rect_max.y - rect_min.y) == 0)
@@ -348,7 +356,8 @@ renderCUDA(
 			
 			// compute accurate depth when necessary
 			// float depth = (s.x * Tw.x + s.y * Tw.y) + Tw.z;
-			float depth = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z;
+			// float depth = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z;
+			float depth = Tw.z;
 			float4 con_o = collected_conic_opacity[j];
 
 			float power = -0.5f * rho;

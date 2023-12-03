@@ -368,7 +368,8 @@ renderCUDA(
 					dL_dG * -G * s.y + dL_dz * Tw.y
 				};
 
-				float3 ddepth_dTw = {s.x, s.y, 1.0};
+				// float3 ddepth_dTw = {s.x, s.y, 1.0};
+				float3 dz_dTw = {0.0, 0.0, 1.0};
 				
 				float dsx_dnorm = s.x * (-inv_norm);
 				float dsy_dnorm = s.y * (-inv_norm);
@@ -396,9 +397,9 @@ renderCUDA(
 				float3 dL_dTu = {-dL_dk.x, -dL_dk.y, -dL_dk.z};
 				float3 dL_dTv = {-dL_dl.x, -dL_dl.y, -dL_dl.z};
 				float3 dL_dTw = {
-					pixf.x * dL_dk.x + pixf.y * dL_dl.x + dL_dz * ddepth_dTw.x, 
-					pixf.x * dL_dk.y + pixf.y * dL_dl.y + dL_dz * ddepth_dTw.y, 
-					pixf.x * dL_dk.z + pixf.y * dL_dl.z + dL_dz * ddepth_dTw.z};
+					pixf.x * dL_dk.x + pixf.y * dL_dl.x + dL_dz * dz_dTw.x, 
+					pixf.x * dL_dk.y + pixf.y * dL_dl.y + dL_dz * dz_dTw.y, 
+					pixf.x * dL_dk.z + pixf.y * dL_dl.z + dL_dz * dz_dTw.z};
 
 
 				// Update gradients w.r.t. 3D covariance (3x3 matrix)
