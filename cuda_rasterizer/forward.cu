@@ -379,17 +379,32 @@ renderCUDA(
 				continue;
 			}
 
+
+#if REG
+			// the first point always has zeros energy
+			float A = 1-T;
+			float error = depth * A - D;
+			distortion += error * alpha * T;
+			// if (collected_id[j] > 0 && pix.x == W / 4 && pix.y == H / 2) {
+			// 	printf("%d forward %d %d\n", contributor, pix.x, pix.y);
+			// 	printf("%d forward %d A %.8f\n", contributor, collected_id[j], A);
+			// 	printf("%d forward %d depth %.8f\n", contributor, collected_id[j], depth);
+			// 	printf("%d forward %d D %.8f\n", contributor, collected_id[j], D);
+			// 	printf("%d forward %d alpha %.8f\n", contributor, collected_id[j], alpha);
+			// 	// printf("%d forward %d color [%.8f, %.8f, %.8f]\n", contributor, collected_id[j], features[collected_id[j] * CHANNELS + 0], features[collected_id[j] * CHANNELS + 1], features[collected_id[j] * CHANNELS + 2]);
+			// 	// printf("%d forward %d rgb [%.8f, %.8f, %.8f]\n", contributor, collected_id[j], C[0], C[1], C[2]);
+			// 	printf("%d forward %d last_alpha %.8f\n", contributor, collected_id[j], 1-T);
+			// 	printf("%d forward %d A %.8f\n", contributor, collected_id[j], A);
+			// 	printf("%d forward %d error %.8f\n", contributor, collected_id[j], error);
+			// 	printf("%d forward %d loss %.8f\n", contributor, collected_id[j], distortion);
+			// 	printf("-----------\n");
+			// }
+#endif
+
 			// Eq. (3) from 3D Gaussian splatting paper.
 			for (int ch = 0; ch < CHANNELS; ch++)
 				C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
 			D += depth * alpha * T;
-
-#if REG
-			// the first point always has zeros energy
-			// (accumulate depth) and (accumulate alpha * depth)
-			float error = 2.0f * abs(depth * (1-test_T) - D);
-			distortion +=  error * alpha * T;
-#endif
 			T = test_T;
 
 			// Keep track of last range entry to update this

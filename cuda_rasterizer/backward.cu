@@ -207,9 +207,9 @@ renderCUDA(
 
 #if REG
 	float dL_dreg;
-	float accum_error_rec = 0;
-	float last_error = 0;
-	float D = inside ? final_Ts[pix_id + H * W] : 0;
+	const float D_final = inside ? final_Ts[pix_id + H * W] : 0;
+	float D = D_final;
+	float last_dL_dT = 0;
 #endif
 
 	if (inside){
@@ -286,7 +286,8 @@ renderCUDA(
 			
 			// compute accurate depth when necessary
 			// float c_d = (s.x * Tw.x + s.y * Tw.y) + Tw.z;
-			float c_d = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z;
+			// float c_d = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z;
+			float c_d = Tw.z;
 			float4 con_o = collected_conic_opacity[j];
 
 			float power = -0.5f * rho;
@@ -323,17 +324,17 @@ renderCUDA(
 
 
 #if REG
-			float w = T * alpha;
-			float A = (1-T + w);
-			float error = 2.0f * abs(c_d * A - D);
-			float multiplier = c_d * A > D ? 1.0f : -1.0f;
-			accum_error_rec = last_alpha * last_error + (1.f - last_alpha) * accum_error_rec;
-			
-			dL_dalpha += (error - accum_error_rec) * dL_dreg;
-			dL_ddepth += w * (-1) * multiplier * dL_dreg;
-			dL_dalpha += w * c_d * multiplier * dL_dreg;
-			last_error = error;
+			float D_next = D;
 			D = D - T * alpha * c_d;
+			float w = T * alpha;
+			float A = (1-T); 
+			float A_next = A + w;
+			float A_final = 1-T_final;
+			float A_error = (A + A_next - A_final) * dL_dreg;
+			float D_error = (D + D_next - D_final) * dL_dreg;
+			float dL_dweight = A_error * c_d - D_error;
+			dL_dalpha += dL_dweight - last_dL_dT;
+			last_dL_dT = dL_dweight * alpha + last_dL_dT * (1 - alpha);
 #endif
 
 			accum_depth_rec = last_alpha * last_depth + (1.f - last_alpha) * accum_depth_rec;
@@ -359,7 +360,18 @@ renderCUDA(
 			const float dL_dG = con_o.w * dL_dalpha;
 			float dL_dz = alpha * T * dL_ddepth; 
 #if REG
-			dL_dz += A * multiplier * dL_dreg;
+			dL_dz += w * A_error;
+			// if (collected_id[j] > 0 && pix.x == W / 4 && pix.y == H / 2) {
+			// 	printf("%d backward %d A %.8f\n", contributor, collected_id[j], A);
+			// 	printf("%d backward %d depth %.8f\n", contributor, collected_id[j], c_d);
+			// 	printf("%d backward %d D %.8f\n", contributor, collected_id[j], D);
+			// 	printf("%d backward %d T %.8f\n", contributor, collected_id[j], T);
+			// 	printf("%d backward %d dL_dalpha %.8f\n", contributor, collected_id[j], dL_dalpha);
+			// 	printf("%d backward %d dL_dz %.8f\n", contributor, collected_id[j], dL_dz);
+			// 	// printf("%d backward %d multiplier %.8f\n", contributor, collected_id[j], multiplier);
+			// 	// printf("%d backward %d depth %.4f\n", contributor, collected_id[j], c_d);
+			// 	printf("-----------\n");
+			// }
 #endif 
 			if (rho3d <= rho2d) {
 				// Update gradients w.r.t. covariance of Gaussian 3x3 (T)
