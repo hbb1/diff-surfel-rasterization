@@ -37,7 +37,7 @@ namespace BACKWARD
 		const float* dL_depths,
 		float * dL_dcov3D,
 		float3* dL_dmean2D,
-		float4* dL_dconic2D,
+		float* dL_dnormal3D,
 		float* dL_dopacity,
 		float* dL_dcolors);
 
@@ -57,7 +57,7 @@ namespace BACKWARD
 		const float tan_fovx, const float tan_fovy,
 		const glm::vec3* campos,
 		const float3* dL_dmean2D,
-		const float* dL_dconics,
+		const float* dL_dnormal3D,
 		float* dL_dcov3D,
 		float* dL_dcolor,
 		float* dL_dsh,

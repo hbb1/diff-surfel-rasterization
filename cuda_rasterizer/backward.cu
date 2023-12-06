@@ -158,7 +158,7 @@ renderCUDA(
 	const float* __restrict__ dL_depths,
 	float * __restrict__ dL_dcov3D,
 	float3* __restrict__ dL_dmean2D,
-	float4* __restrict__ dL_dconic2D,
+	float* __restrict__ dL_dnormal3D,
 	float* __restrict__ dL_dopacity,
 	float* __restrict__ dL_dcolors)
 {
@@ -200,13 +200,28 @@ renderCUDA(
 
 	float accum_rec[C] = { 0 };
 	float dL_dpixel[C];
+
+#if RENDER_AXUTILITY
+	float dL_dreg;
 	float dL_ddepth;
 	float dL_daccum;
+	float dL_dnormal2D[3];
+	if (inside) {
+		dL_ddepth = dL_depths[DEPTH_OFFSET * H * W + pix_id];
+		dL_daccum = dL_depths[ALPHA_OFFSET * H * W + pix_id];
+		dL_dreg = dL_depths[DISTORTION_OFFSET * H * W + pix_id];
+		for (int i = 0; i < 3; i++) 
+			dL_dnormal2D[i] = dL_depths[(NORMAL_OFFSET + i) * H * W + pix_id];
+	}
+
+	// for compute gradient with respect to depth and normal
+	float last_depth = 0;
+	float last_normal[3] = { 0 };
 	float accum_depth_rec = 0;
 	float accum_alpha_rec = 0;
+	float accum_normal_rec[3] = {0};
 
-#if REG
-	float dL_dreg;
+	// for compute gradient with respect to the distortion map
 	const float D_final = inside ? final_Ts[pix_id + H * W] : 0;
 	float D = D_final;
 	float last_dL_dT = 0;
@@ -215,16 +230,10 @@ renderCUDA(
 	if (inside){
 		for (int i = 0; i < C; i++)
 			dL_dpixel[i] = dL_dpixels[i * H * W + pix_id];
-	        dL_ddepth = dL_depths[pix_id];
-			dL_daccum = dL_depths[1 * H * W + pix_id];
-#if REG
-			dL_dreg = dL_depths[2 * H * W + pix_id];
-#endif
 	}
 
 	float last_alpha = 0;
 	float last_color[C] = { 0 };
-	float last_depth = 0;
 
 	// Gradient of pixel coordinate w.r.t. normalized 
 	// screen-space viewport corrdinates (-1 to 1)
@@ -249,7 +258,7 @@ renderCUDA(
 			collected_Tw[block.thread_rank()] = {cov3Ds[9 * coll_id+6], cov3Ds[9 * coll_id+7], cov3Ds[9 * coll_id+8]};
 			for (int i = 0; i < C; i++)
 				collected_colors[i * BLOCK_SIZE + block.thread_rank()] = colors[coll_id * C + i];
-		        // collected_depths[block.thread_rank()] = depths[coll_id];
+				// collected_depths[block.thread_rank()] = depths[coll_id];
 		}
 		block.sync();
 
@@ -264,9 +273,9 @@ renderCUDA(
 
 			// compute ray-splat intersection as before
 			// float2 xy = collected_xy[j];
-            float3 Tu = collected_Tu[j];
-            float3 Tv = collected_Tv[j];
-            float3 Tw = collected_Tw[j];
+			float3 Tu = collected_Tu[j];
+			float3 Tv = collected_Tv[j];
+			float3 Tw = collected_Tw[j];
 			// compute two planes intersection as the ray intersection
 			float3 k = {-Tu.x + pixf.x * Tw.x, -Tu.y + pixf.x * Tw.y, -Tu.z + pixf.x * Tw.z};
 			float3 l = {-Tv.x + pixf.y * Tw.x, -Tv.y + pixf.y * Tw.y, -Tv.z + pixf.y * Tw.z};
@@ -289,6 +298,7 @@ renderCUDA(
 			// float c_d = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z;
 			float c_d = Tw.z;
 			float4 con_o = collected_conic_opacity[j];
+			float normal[3] = {con_o.x, con_o.y, con_o.z};
 
 			float power = -0.5f * rho;
 			if (power > 0.0f)
@@ -322,8 +332,8 @@ renderCUDA(
 				atomicAdd(&(dL_dcolors[global_id * C + ch]), dchannel_dcolor * dL_dchannel);
 			}
 
-
-#if REG
+#if RENDER_AXUTILITY
+			// Propagate gradients w.r.t ray-splat distortions
 			float D_next = D;
 			D = D - T * alpha * c_d;
 			float w = T * alpha;
@@ -334,16 +344,26 @@ renderCUDA(
 			float D_error = (D + D_next - D_final) * dL_dreg;
 			float dL_dweight = A_error * c_d - D_error;
 			dL_dalpha += dL_dweight - last_dL_dT;
-			last_dL_dT = dL_dweight * alpha + last_dL_dT * (1 - alpha);
-#endif
 
+			last_dL_dT = dL_dweight * alpha + (1 - alpha) * last_dL_dT;
+
+			// Propagate gradients w.r.t ray-splat depths
 			accum_depth_rec = last_alpha * last_depth + (1.f - last_alpha) * accum_depth_rec;
 			last_depth = c_d;
 			dL_dalpha += (c_d - accum_depth_rec) * dL_ddepth;
-			
+			// Propagate gradients w.r.t. color ray-splat alphas
 			accum_alpha_rec = last_alpha * 1.0 + (1.f - last_alpha) * accum_alpha_rec;
 			dL_dalpha += (1 - accum_alpha_rec) * dL_daccum;
-			
+
+			// Propagate gradients to per-Gaussian normals
+			for (int ch = 0; ch < 3; ch++) {
+				accum_normal_rec[ch] = last_alpha * last_normal[ch] + (1.f - last_alpha) * accum_normal_rec[ch];
+				last_normal[ch] = normal[ch];
+				dL_dalpha += (normal[ch] - accum_normal_rec[ch]) * dL_dnormal2D[ch];
+				atomicAdd((&dL_dnormal3D[global_id * 3 + ch]), alpha * T * dL_dnormal2D[ch]);
+			}
+#endif
+
 			dL_dalpha *= T;
 			// Update last alpha (to be used in the next iteration)
 			last_alpha = alpha;
@@ -359,7 +379,8 @@ renderCUDA(
 			// Helpful reusable temporary variables
 			const float dL_dG = con_o.w * dL_dalpha;
 			float dL_dz = alpha * T * dL_ddepth; 
-#if REG
+
+#if RENDER_AXUTILITY
 			dL_dz += w * A_error;
 			// if (collected_id[j] > 0 && pix.x == W / 4 && pix.y == H / 2) {
 			// 	printf("%d backward %d A %.8f\n", contributor, collected_id[j], A);
@@ -372,7 +393,7 @@ renderCUDA(
 			// 	// printf("%d backward %d depth %.4f\n", contributor, collected_id[j], c_d);
 			// 	printf("-----------\n");
 			// }
-#endif 
+#endif
 			if (rho3d <= rho2d) {
 				// Update gradients w.r.t. covariance of Gaussian 3x3 (T)
 				float2 dL_ds = {
@@ -437,7 +458,7 @@ renderCUDA(
 				// 	printf("%d Tu %.8f %.8f %.8f\n", global_id, Tu.x, Tu.y, Tu.z);
 				// 	printf("%d Tv %.8f %.8f %.8f\n", global_id, Tv.x, Tv.y, Tv.z);
 				// 	printf("%d Tw %.8f %.8f %.8f\n", global_id, Tw.x, Tw.y, Tw.z);
-        		// 	printf("%d dL_dTu %.8f %.8f %.8f\n", global_id, dL_dTu.x, dL_dTu.y, dL_dTu.z);
+				// 	printf("%d dL_dTu %.8f %.8f %.8f\n", global_id, dL_dTu.x, dL_dTu.y, dL_dTu.z);
 				// 	printf("%d dL_dTv %.8f %.8f %.8f\n", global_id, dL_dTv.x, dL_dTv.y, dL_dTv.z);
 				// 	printf("%d dL_dTw %.8f %.8f %.8f\n", global_id, dL_dTw.x, dL_dTw.y, dL_dTw.z);
 				// }
@@ -467,34 +488,35 @@ renderCUDA(
 }
 
 inline __device__ void computeCov3D(
-    const glm::vec3 & p_world,
-    const glm::vec4 & quat,
-    const glm::vec3 & scale,
-    const float* viewmat,
-    const float4 & intrins,
-    const float* cov3D,
-    const float* dL_dcov3D,
-    glm::vec3 & dL_dmean3D,
-    glm::vec3 & dL_dscale,
-    glm::vec4 & dL_drot
+	const glm::vec3 & p_world,
+	const glm::vec4 & quat,
+	const glm::vec3 & scale,
+	const float* viewmat,
+	const float4 & intrins,
+	const float* cov3D,
+	const float* dL_dcov3D,
+	const float* dL_dnormal3D,
+	glm::vec3 & dL_dmean3D,
+	glm::vec3 & dL_dscale,
+	glm::vec4 & dL_drot
 ) {
-    // camera information 
-    const glm::mat3 W = glm::mat3(
-        viewmat[0],viewmat[1],viewmat[2],
-        viewmat[4],viewmat[5],viewmat[6],
+	// camera information 
+	const glm::mat3 W = glm::mat3(
+		viewmat[0],viewmat[1],viewmat[2],
+		viewmat[4],viewmat[5],viewmat[6],
 		viewmat[8],viewmat[9],viewmat[10]
-    ); // viewmat 
+	); // viewmat 
 
-    const glm::vec3 cam_pos = glm::vec3(viewmat[12], viewmat[13], viewmat[14]); // camera center
-    const glm::mat4 P = glm::mat4(
-        intrins.x, 0.0, 0.0, 0.0,
-        0.0, intrins.y, 0.0, 0.0,
-        intrins.z, intrins.w, 1.0, 1.0,
+	const glm::vec3 cam_pos = glm::vec3(viewmat[12], viewmat[13], viewmat[14]); // camera center
+	const glm::mat4 P = glm::mat4(
+		intrins.x, 0.0, 0.0, 0.0,
+		0.0, intrins.y, 0.0, 0.0,
+		intrins.z, intrins.w, 1.0, 1.0,
 		0.0, 0.0, 0.0, 0.0
-    );
+	);
 
 	glm::mat3 S = scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
-    glm::mat3 R = quat_to_rotmat(quat);
+	glm::mat3 R = quat_to_rotmat(quat);
 	glm::mat3 RS = R * S;
 	glm::mat3 M = glm::mat3(W * RS[0], W * RS[1], W * p_world + cam_pos);
 
@@ -517,35 +539,39 @@ inline __device__ void computeCov3D(
 	glm::vec3 dL_dRS1 = glm::transpose(W) * dL_dM[1];
 	glm::vec3 dL_dpw = glm::transpose(W) * dL_dM[2];
 	glm::mat3 dL_dR = glm::mat3(
-        dL_dRS0 * glm::vec3(scale.x),
-        dL_dRS1 * glm::vec3(scale.y),
-        glm::vec3(0.f)
-    );
+		dL_dRS0 * glm::vec3(scale.x),
+		dL_dRS1 * glm::vec3(scale.y),
+#if RENDER_AXUTILITY
+		glm::vec3(dL_dnormal3D[0], dL_dnormal3D[1], dL_dnormal3D[2])
+#else
+		glm::vec3(0.f)
+#endif
+	);
 
-    dL_drot = quat_to_rotmat_vjp(quat, dL_dR);
+	dL_drot = quat_to_rotmat_vjp(quat, dL_dR);
 	dL_dmean3D = dL_dpw;
 	dL_dscale = glm::vec3(
-        (float)glm::dot(dL_dRS0, R[0]),
-        (float)glm::dot(dL_dRS1, R[1]),
-        0.0f
-    );
+		(float)glm::dot(dL_dRS0, R[0]),
+		(float)glm::dot(dL_dRS1, R[1]),
+		0.0f
+	);
 
 	// unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
-    // if (idx == 0) {
+	// if (idx == 0) {
 	// 		glm::mat4x3 T = glm::transpose(P * glm::mat3x4(
 	// 		glm::vec4(M[0], 0.0),
 	// 		glm::vec4(M[1], 0.0),
 	// 		glm::vec4(M[2], 1.0)
 	// 	));
 	// 	printf("T %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, T[0].x, T[0].y, T[0].z, T[1].x, T[1].y, T[1].z, T[2].x, T[2].y, T[2].z, T[3].x, T[3].y, T[3].z);
-    //     printf("dL_dT %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dT[0].x, dL_dT[0].y, dL_dT[0].z, dL_dT[1].x, dL_dT[1].y, dL_dT[1].z, dL_dT[2].x, dL_dT[2].y, dL_dT[2].z, dL_dT[3].x, dL_dT[3].y, dL_dT[3].z);
-    //     printf("dL_dM %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dM[0].x, dL_dM[0].y, dL_dM[0].z, dL_dM[1].x, dL_dM[1].y, dL_dM[1].z, dL_dM[2].x, dL_dM[2].y, dL_dM[2].z);
+	//     printf("dL_dT %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dT[0].x, dL_dT[0].y, dL_dT[0].z, dL_dT[1].x, dL_dT[1].y, dL_dT[1].z, dL_dT[2].x, dL_dT[2].y, dL_dT[2].z, dL_dT[3].x, dL_dT[3].y, dL_dT[3].z);
+	//     printf("dL_dM %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dM[0].x, dL_dM[0].y, dL_dM[0].z, dL_dM[1].x, dL_dM[1].y, dL_dM[1].z, dL_dM[2].x, dL_dM[2].y, dL_dM[2].z);
 	// 	printf("dL_dM_aug %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dM_aug[0].x, dL_dM_aug[0].y, dL_dM_aug[0].z, dL_dM_aug[0].w, dL_dM_aug[1].x, dL_dM_aug[1].y, dL_dM_aug[1].z, dL_dM_aug[1].w, dL_dM_aug[2].x, dL_dM_aug[2].y, dL_dM_aug[2].z, dL_dM_aug[2].w);
-    //     printf("dL_dR %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dR[0].x, dL_dR[0].y, dL_dR[0].z, dL_dR[1].x, dL_dR[1].y, dL_dR[1].z, dL_dR[2].x, dL_dR[2].y, dL_dR[2].z);
+	//     printf("dL_dR %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dR[0].x, dL_dR[0].y, dL_dR[0].z, dL_dR[1].x, dL_dR[1].y, dL_dR[1].z, dL_dR[2].x, dL_dR[2].y, dL_dR[2].z);
 	// 	printf("dL_dscale %d [%.8f, %.8f, %.8f]\n", idx, dL_dscale.x, dL_dscale.y, dL_dscale.z);
 	// 	printf("dL_drot %d [%.8f, %.8f, %.8f, %.8f]\n", idx, dL_drot.x, dL_drot.y, dL_drot.z, dL_drot.w);
 	// 	printf("dL_dmean3d %d [%.8f, %.8f, %.8f]\n", idx, dL_dmean3D.x, dL_dmean3D.y, dL_dmean3D.z);
-    // }
+	// }
 }
 
 
@@ -570,6 +596,7 @@ __global__ void preprocessCUDA(
 	const glm::vec3* campos, 
 	// grad input
 	const float* dL_dcov3Ds,
+	const float* dL_dnormal3Ds,
 	float* dL_dcolors,
 	float* dL_dshs,
 	// grad output
@@ -583,6 +610,8 @@ __global__ void preprocessCUDA(
 
 	const float* cov3D = &(cov3Ds[9 * idx]);
 	const float* dL_dcov3D = &(dL_dcov3Ds[9 * idx]);
+	const float* dL_dnormal3D = &(dL_dnormal3Ds[3 * idx]);
+
 	glm::vec3 p_world = glm::vec3(means3D[idx].x, means3D[idx].y, means3D[idx].z);
 	float4 intrins = {focal_x, focal_y, focal_x * tan_fovx, focal_y * tan_fovy};
 
@@ -597,6 +626,7 @@ __global__ void preprocessCUDA(
 		intrins,
 		cov3D, 
 		dL_dcov3D,
+		dL_dnormal3D,
 		dL_dmean3D, 
 		dL_dscale,
 		dL_drot
@@ -612,10 +642,9 @@ __global__ void preprocessCUDA(
 
 __global__ void computeCenter(int P, 
 	const int * radii,
-    const float * cov3Ds,
-    const float * dL_dconics,
-    const float3 * dL_dmean2Ds,
-    float *dL_dcov3Ds) {
+	const float * cov3Ds,
+	const float3 * dL_dmean2Ds,
+	float *dL_dcov3Ds) {
 	
 	auto idx = cg::this_grid().thread_rank();
 	if (idx >= P || !(radii[idx] > 0))
@@ -636,7 +665,7 @@ __global__ void computeCenter(int P,
 
 	glm::vec3 p = glm::vec3(
 		glm::dot(f, T[0] * T[3]),
-        glm::dot(f, T[1] * T[3]), 
+		glm::dot(f, T[1] * T[3]), 
 		glm::dot(f, T[2] * T[3]));
 
 	glm::vec3 dL_dT0 = dL_dmean2D.x * f * T[3];
@@ -656,13 +685,13 @@ __global__ void computeCenter(int P,
 	dL_dcov3Ds[9 * idx + 7] += dL_dT3.y;
 	dL_dcov3Ds[9 * idx + 8] += dL_dT3.z;
 
-    // if (idx == 0) {
+	// if (idx == 0) {
 	// 	printf("dL_dmean2d %d [%.8f, %.8f]\n", idx, dL_dmean2D.x, dL_dmean2D.y);
 	// 	printf("T %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, T[0].x, T[0].y, T[0].z, T[1].x, T[1].y, T[1].z, T[2].x, T[2].y, T[2].z, T[3].x, T[3].y, T[3].z);
-    //     printf("dL_dT %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dT0.x, dL_dT0.y, dL_dT0.z, dL_dT1.x, dL_dT1.y, dL_dT1.z, dL_dT3.x, dL_dT3.y, dL_dT3.z);
-    //     // printf("dL_dM %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dM[0].x, dL_dM[0].y, dL_dM[0].z, dL_dM[1].x, dL_dM[1].y, dL_dM[1].z, dL_dM[2].x, dL_dM[2].y, dL_dM[2].z);
+	//     printf("dL_dT %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dT0.x, dL_dT0.y, dL_dT0.z, dL_dT1.x, dL_dT1.y, dL_dT1.z, dL_dT3.x, dL_dT3.y, dL_dT3.z);
+	//     // printf("dL_dM %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dM[0].x, dL_dM[0].y, dL_dM[0].z, dL_dM[1].x, dL_dM[1].y, dL_dM[1].z, dL_dM[2].x, dL_dM[2].y, dL_dM[2].z);
 	// 	// printf("dL_dM_aug %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dM_aug[0].x, dL_dM_aug[0].y, dL_dM_aug[0].z, dL_dM_aug[0].w, dL_dM_aug[1].x, dL_dM_aug[1].y, dL_dM_aug[1].z, dL_dM_aug[1].w, dL_dM_aug[2].x, dL_dM_aug[2].y, dL_dM_aug[2].z, dL_dM_aug[2].w);
-    // }
+	// }
 }
 
 
@@ -682,7 +711,7 @@ void BACKWARD::preprocess(
 	const float tan_fovx, const float tan_fovy,
 	const glm::vec3* campos, 
 	const float3* dL_dmean2Ds,
-	const float* dL_dconics,
+	const float* dL_dnormal3Ds,
 	float* dL_dcov3Ds,
 	float* dL_dcolors,
 	float* dL_dshs,
@@ -700,10 +729,9 @@ void BACKWARD::preprocess(
 	computeCenter << <(P + 255) / 256, 256 >> >(
 		P, 
 		radii,
-    	cov3Ds,
-    	dL_dconics,
-    	dL_dmean2Ds,
-    	dL_dcov3Ds);
+		cov3Ds,
+		dL_dmean2Ds,
+		dL_dcov3Ds);
 	
 	// propagate gradients from cov3d to mean3d, scale, rot, sh, color
 	preprocessCUDA<NUM_CHANNELS><< <(P + 255) / 256, 256 >> > (
@@ -724,6 +752,7 @@ void BACKWARD::preprocess(
 		tan_fovy,
 		campos,	
 		dL_dcov3Ds,
+		dL_dnormal3Ds,
 		dL_dcolors,
 		dL_dshs,
 		dL_dmean3Ds,
@@ -749,7 +778,7 @@ void BACKWARD::render(
 	const float* dL_depths,
 	float * dL_dcov3D,
 	float3* dL_dmean2D,
-	float4* dL_dconic2D,
+	float* dL_dnormal3D,
 	float* dL_dopacity,
 	float* dL_dcolors)
 {
@@ -769,7 +798,7 @@ void BACKWARD::render(
 		dL_depths,
 		dL_dcov3D,
 		dL_dmean2D,
-		dL_dconic2D,
+		dL_dnormal3D,
 		dL_dopacity,
 		dL_dcolors
 		);

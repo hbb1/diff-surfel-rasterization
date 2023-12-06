@@ -364,7 +364,7 @@ void CudaRasterizer::Rasterizer::backward(
 	const float* dL_dpix,
 	const float* dL_depths,
 	float* dL_dmean2D,
-	float* dL_dconic,
+	float* dL_dnormal,
 	float* dL_dopacity,
 	float* dL_dcolor,
 	float* dL_dmean3D,
@@ -413,7 +413,7 @@ void CudaRasterizer::Rasterizer::backward(
 		dL_depths,
 		dL_dcov3D,
 		(float3*)dL_dmean2D,
-		(float4*)dL_dconic,
+		dL_dnormal,
 		dL_dopacity,
 		dL_dcolor), debug)
 
@@ -436,7 +436,7 @@ void CudaRasterizer::Rasterizer::backward(
 		tan_fovx, tan_fovy,
 		(glm::vec3*)campos,
 		(float3*)dL_dmean2D, // gradient inputs
-		dL_dconic,		     // gradient inputs		
+		dL_dnormal,		     // gradient inputs
 		dL_dcov3D,
 		dL_dcolor,
 		dL_dsh,

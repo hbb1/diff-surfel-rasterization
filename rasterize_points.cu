@@ -25,23 +25,23 @@
 #include <functional>
 
 #define CHECK_INPUT(x)											\               
-    AT_ASSERTM(x.type().is_cuda(), #x " must be a CUDA tensor")
-    // AT_ASSERTM(x.is_contiguous(), #x " must be contiguous")
+	AT_ASSERTM(x.type().is_cuda(), #x " must be a CUDA tensor")
+	// AT_ASSERTM(x.is_contiguous(), #x " must be contiguous")
 
 std::function<char*(size_t N)> resizeFunctional(torch::Tensor& t) {
-    auto lambda = [&t](size_t N) {
-        t.resize_({(long long)N});
+	auto lambda = [&t](size_t N) {
+		t.resize_({(long long)N});
 		return reinterpret_cast<char*>(t.contiguous().data_ptr());
-    };
-    return lambda;
+	};
+	return lambda;
 }
 
 std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 RasterizeGaussiansCUDA(
 	const torch::Tensor& background,
 	const torch::Tensor& means3D,
-    const torch::Tensor& colors,
-    const torch::Tensor& opacity,
+	const torch::Tensor& colors,
+	const torch::Tensor& opacity,
 	const torch::Tensor& scales,
 	const torch::Tensor& rotations,
 	const float scale_modifier,
@@ -50,8 +50,8 @@ RasterizeGaussiansCUDA(
 	const torch::Tensor& projmatrix,
 	const float tan_fovx, 
 	const float tan_fovy,
-    const int image_height,
-    const int image_width,
+	const int image_height,
+	const int image_width,
 	const torch::Tensor& sh,
 	const int degree,
 	const torch::Tensor& campos,
@@ -59,7 +59,7 @@ RasterizeGaussiansCUDA(
 	const bool debug)
 {
   if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
-    AT_ERROR("means3D must have dimensions (num_points, 3)");
+	AT_ERROR("means3D must have dimensions (num_points, 3)");
   }
   
   const int P = means3D.size(0);
@@ -82,7 +82,7 @@ RasterizeGaussiansCUDA(
   auto float_opts = means3D.options().dtype(torch::kFloat32);
 
   torch::Tensor out_color = torch::full({NUM_CHANNELS, H, W}, 0.0, float_opts);
-  torch::Tensor out_depth = torch::full({3, H, W}, 0.0, float_opts);
+  torch::Tensor out_depth = torch::full({3+3, H, W}, 0.0, float_opts);
   torch::Tensor radii = torch::full({P}, 0, means3D.options().dtype(torch::kInt32));
   
   torch::Device device(torch::kCUDA);
@@ -101,13 +101,13 @@ RasterizeGaussiansCUDA(
 	  if(sh.size(0) != 0)
 	  {
 		M = sh.size(1);
-      }
+	  }
 
 	  rendered = CudaRasterizer::Rasterizer::forward(
-	    geomFunc,
+		geomFunc,
 		binningFunc,
 		imgFunc,
-	    P, degree, M,
+		P, degree, M,
 		background.contiguous().data<float>(),
 		W, H,
 		means3D.contiguous().data<float>(),
@@ -134,20 +134,20 @@ RasterizeGaussiansCUDA(
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
  RasterizeGaussiansBackwardCUDA(
- 	const torch::Tensor& background,
+	 const torch::Tensor& background,
 	const torch::Tensor& means3D,
 	const torch::Tensor& radii,
-    const torch::Tensor& colors,
+	const torch::Tensor& colors,
 	const torch::Tensor& scales,
 	const torch::Tensor& rotations,
 	const float scale_modifier,
 	const torch::Tensor& cov3D_precomp,
 	const torch::Tensor& viewmatrix,
-    const torch::Tensor& projmatrix,
+	const torch::Tensor& projmatrix,
 	const float tan_fovx,
 	const float tan_fovy,
-    const torch::Tensor& dL_dout_color,
-    const torch::Tensor& dL_dout_depth,
+	const torch::Tensor& dL_dout_color,
+	const torch::Tensor& dL_dout_depth,
 	const torch::Tensor& sh,
 	const int degree,
 	const torch::Tensor& campos,
@@ -186,7 +186,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
   torch::Tensor dL_dmeans3D = torch::zeros({P, 3}, means3D.options());
   torch::Tensor dL_dmeans2D = torch::zeros({P, 3}, means3D.options());
   torch::Tensor dL_dcolors = torch::zeros({P, NUM_CHANNELS}, means3D.options());
-  torch::Tensor dL_dconic = torch::zeros({P, 2, 2}, means3D.options());
+  torch::Tensor dL_dnormal = torch::zeros({P, 3}, means3D.options());
   torch::Tensor dL_dopacity = torch::zeros({P, 1}, means3D.options());
   torch::Tensor dL_dcov3D = torch::zeros({P, 9}, means3D.options());
   torch::Tensor dL_dsh = torch::zeros({P, M, 3}, means3D.options());
@@ -217,7 +217,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	  dL_dout_color.contiguous().data<float>(),
 	  dL_dout_depth.contiguous().data<float>(),
 	  dL_dmeans2D.contiguous().data<float>(),
-	  dL_dconic.contiguous().data<float>(),  
+	  dL_dnormal.contiguous().data<float>(),  
 	  dL_dopacity.contiguous().data<float>(),
 	  dL_dcolors.contiguous().data<float>(),
 	  dL_dmeans3D.contiguous().data<float>(),

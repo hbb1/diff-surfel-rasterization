@@ -71,24 +71,24 @@ __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const 
 }
 
 
-__device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, const glm::vec3 &scale, const float *viewmat, const float4 &intrins, float* cov3D) {
-    // camera information 
-    const glm::mat3 W = glm::mat3(
-        viewmat[0],viewmat[1],viewmat[2],
-        viewmat[4],viewmat[5],viewmat[6],
+__device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, const glm::vec3 &scale, const float *viewmat, const float4 &intrins, float* cov3D, float3 &normal) {
+	// camera information 
+	const glm::mat3 W = glm::mat3(
+		viewmat[0],viewmat[1],viewmat[2],
+		viewmat[4],viewmat[5],viewmat[6],
 		viewmat[8],viewmat[9],viewmat[10]
-    ); // viewmat 
+	); // viewmat 
 
-    // const glm::vec3 px = glm::vec3(p_world.x, p_world.y, p_world.z);            // center
-    const glm::vec3 cam_pos = glm::vec3(viewmat[12], viewmat[13], viewmat[14]); // camera center
-    const glm::mat4 P = glm::mat4(
-        intrins.x, 0.0, 0.0, 0.0,
-        0.0, intrins.y, 0.0, 0.0,
-        intrins.z, intrins.w, 1.0, 1.0,
+	// const glm::vec3 px = glm::vec3(p_world.x, p_world.y, p_world.z);            // center
+	const glm::vec3 cam_pos = glm::vec3(viewmat[12], viewmat[13], viewmat[14]); // camera center
+	const glm::mat4 P = glm::mat4(
+		intrins.x, 0.0, 0.0, 0.0,
+		0.0, intrins.y, 0.0, 0.0,
+		intrins.z, intrins.w, 1.0, 1.0,
 		0.0, 0.0, 0.0, 0.0
-    );
+	);
 
-    glm::mat3 R = quat_to_rotmat(quat) * scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
+	glm::mat3 R = quat_to_rotmat(quat) * scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
 	glm::mat3 M = glm::mat3(W * R[0], W * R[1], W * p_world + cam_pos);
 	// don't draw if the matrix is singular
 	// if (glm::determinant(M) == 0.0f) return false;
@@ -110,6 +110,7 @@ __device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, co
 	cov3D[6] = T[2].x;
 	cov3D[7] = T[2].y;
 	cov3D[8] = T[2].z;
+	normal = {R[2].x, R[2].y, R[2].z};
 	return true;
 }
 
@@ -129,13 +130,13 @@ __device__ bool computeCenter(const float *cov3D, float2 & center, float2 & exte
 
 	glm::vec3 p = glm::vec3(
 		glm::dot(f, T[0] * T[3]),
-        glm::dot(f, T[1] * T[3]), 
+		glm::dot(f, T[1] * T[3]), 
 		glm::dot(f, T[2] * T[3]));
 	
 	glm::vec3 h0 = p * p - 
 		glm::vec3(
 			glm::dot(f, T[0] * T[0]),
-            glm::dot(f, T[1] * T[1]), 
+			glm::dot(f, T[1] * T[1]), 
 			glm::dot(f, T[2] * T[2])
 		);
 
@@ -194,20 +195,21 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	// view frustum cullling TODO
 	const float* cov3D;
 	bool ok;
+	float3 normal;
 	if (cov3D_precomp != nullptr)
 	{
 		cov3D = cov3D_precomp + idx * 9;
 	}
 	else
 	{
-		ok = computeCov3D(p_world, quat, scale, viewmatrix, intrins, cov3Ds + idx * 9);
+		ok = computeCov3D(p_world, quat, scale, viewmatrix, intrins, cov3Ds + idx * 9, normal);
 		if (!ok) return;
 		cov3D = cov3Ds + idx * 9;
 	}
 	
 	//  compute center and extent
-    float2 center;
-    float2 extent;
+	float2 center;
+	float2 extent;
 	ok = computeCenter(cov3D, center, extent);
 	if (!ok) return;
 
@@ -238,12 +240,12 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	depths[idx] = p_view.z;
 	radii[idx] = (int)radius;
 	points_xy_image[idx] = center;
-	conic_opacity[idx] = {0.0, 0.0, 0.0, opacities[idx]};
+	conic_opacity[idx] = {normal.x, normal.y, normal.z, opacities[idx]};
 	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
 
 	// if (idx % 32 == 0) {
-    //     printf("%d center %.4f %.4f\n", idx, center.x, center.y);
-    //     printf("%d extent %.4f %.4f %.4f\n", idx, extent.x, extent.y);
+	//     printf("%d center %.4f %.4f\n", idx, center.x, center.y);
+	//     printf("%d extent %.4f %.4f %.4f\n", idx, extent.x, extent.y);
 	// }
 }
 
@@ -299,10 +301,13 @@ renderCUDA(
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
 	float C[CHANNELS] = { 0 };
-	float D = { 0 };
 
-#ifdef REG
-	float distortion = 0;
+
+#if RENDER_AXUTILITY
+	// render axutility ouput
+	float D = { 0 };
+	float N[3] = {0};
+	float distortion = { 0 };
 #endif
 
 	// Iterate over batches until all done or range is complete
@@ -335,9 +340,9 @@ renderCUDA(
 
 			// compute ray-splat intersection
 			// float2 xy = collected_xy[j];
-            float3 Tu = collected_Tu[j];
-            float3 Tv = collected_Tv[j];
-            float3 Tw = collected_Tw[j];
+			float3 Tu = collected_Tu[j];
+			float3 Tv = collected_Tv[j];
+			float3 Tw = collected_Tw[j];
 			// compute two planes intersection as the ray intersection
 			float3 k = {-Tu.x + pixf.x * Tw.x, -Tu.y + pixf.x * Tw.y, -Tu.z + pixf.x * Tw.z};
 			float3 l = {-Tv.x + pixf.y * Tw.x, -Tv.y + pixf.y * Tw.y, -Tv.z + pixf.y * Tw.z};
@@ -359,7 +364,7 @@ renderCUDA(
 			// float depth = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z;
 			float depth = Tw.z;
 			float4 con_o = collected_conic_opacity[j];
-
+			float normal[3] = {con_o.x, con_o.y, con_o.z};
 			float power = -0.5f * rho;
 			// power = -0.5f * 100.f * max(rho - 1, 0.0f);
 			if (power > 0.0f)
@@ -380,14 +385,15 @@ renderCUDA(
 			}
 
 
-#if REG
-			// the first point always has zeros energy
+#if RENDER_AXUTILITY
+			// render distortion map
 			float A = 1-T;
 			float error = depth * A - D;
 			distortion += error * alpha * T;
 			// if (collected_id[j] > 0 && pix.x == W / 4 && pix.y == H / 2) {
-			// 	printf("%d forward %d %d\n", contributor, pix.x, pix.y);
-			// 	printf("%d forward %d A %.8f\n", contributor, collected_id[j], A);
+				// printf("%d forward %d %d\n", contributor, pix.x, pix.y);
+				// printf("%d forward %d normal %.4f %.4f %.4f\n", contributor, normal[0], normal[1], normal[2]);
+				// printf("%d forward %d A %.8f\n", contributor, collected_id[j], A);
 			// 	printf("%d forward %d depth %.8f\n", contributor, collected_id[j], depth);
 			// 	printf("%d forward %d D %.8f\n", contributor, collected_id[j], D);
 			// 	printf("%d forward %d alpha %.8f\n", contributor, collected_id[j], alpha);
@@ -397,14 +403,19 @@ renderCUDA(
 			// 	printf("%d forward %d A %.8f\n", contributor, collected_id[j], A);
 			// 	printf("%d forward %d error %.8f\n", contributor, collected_id[j], error);
 			// 	printf("%d forward %d loss %.8f\n", contributor, collected_id[j], distortion);
-			// 	printf("-----------\n");
+				// printf("-----------\n");
 			// }
+			
+			// render normal map
+			for (int ch=0; ch<3; ch++) N[ch] += normal[ch] * alpha * T;
+
+			// render depth map
+			D += depth * alpha * T;
 #endif
 
 			// Eq. (3) from 3D Gaussian splatting paper.
 			for (int ch = 0; ch < CHANNELS; ch++)
 				C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
-			D += depth * alpha * T;
 			T = test_T;
 
 			// Keep track of last range entry to update this
@@ -421,11 +432,13 @@ renderCUDA(
 		n_contrib[pix_id] = last_contributor;
 		for (int ch = 0; ch < CHANNELS; ch++)
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
-		out_depth[pix_id] = D;
-		out_depth[pix_id + H * W] = 1 - T;
-#ifdef REG
+
+#if RENDER_AXUTILITY
 		final_T[pix_id + H * W] = D;
-		out_depth[pix_id + 2 * H * W] = distortion;
+		out_depth[pix_id + DEPTH_OFFSET * H * W] = D;
+		out_depth[pix_id + ALPHA_OFFSET * H * W] = 1 - T;
+		for (int ch=0; ch<3; ch++) out_depth[pix_id + (NORMAL_OFFSET+ch) * H * W] = N[ch];
+		out_depth[pix_id + DISTORTION_OFFSET * H * W] = distortion;
 #endif
 	}
 }
