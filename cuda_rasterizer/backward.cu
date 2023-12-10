@@ -294,9 +294,12 @@ renderCUDA(
 			float rho = min(rho3d, rho2d);
 			
 			// compute accurate depth when necessary
+#if INTERSECT_DEPTH
 			// float c_d = (s.x * Tw.x + s.y * Tw.y) + Tw.z;
-			// float c_d = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z;
+			float c_d = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z;
+#else
 			float c_d = Tw.z;
+#endif
 			float4 con_o = collected_conic_opacity[j];
 			float normal[3] = {con_o.x, con_o.y, con_o.z};
 
@@ -309,6 +312,7 @@ renderCUDA(
 			if (alpha < 1.0f / 255.0f)
 				continue;
 
+			float T_last = T;
 			T = T / (1.f - alpha);
 			const float dchannel_dcolor = alpha * T;
 
@@ -334,14 +338,22 @@ renderCUDA(
 
 #if RENDER_AXUTILITY
 			// Propagate gradients w.r.t ray-splat distortions
-			float D_next = D;
+			float D_last = D;
 			D = D - T * alpha * c_d;
 			float w = T * alpha;
-			float A = (1-T); 
-			float A_next = A + w;
-			float A_final = 1-T_final;
-			float A_error = (A + A_next - A_final) * dL_dreg;
-			float D_error = (D + D_next - D_final) * dL_dreg;
+			float A = (1-T);
+			float A_last = (1-T_last);
+			float A_final = (1-T_final);
+			float multiplier = 1.0f;
+
+#if INTERSECT_DEPTH
+			multiplier *= ((A == 0) || (c_d * A - D >= 0)) ? 1.0f : -1.0f;
+			if (abs(c_d * A - D) < SMOOTH_THRESHOLD) // numerical stable
+				multiplier = 0.0f;
+#endif
+
+			float A_error = (A + A_last - A_final) * dL_dreg * multiplier;
+			float D_error = (D + D_last - D_final) * dL_dreg * multiplier;
 			float dL_dweight = A_error * c_d - D_error;
 			dL_dalpha += dL_dweight - last_dL_dT;
 
@@ -400,10 +412,11 @@ renderCUDA(
 					dL_dG * -G * s.x + dL_dz * Tw.x,
 					dL_dG * -G * s.y + dL_dz * Tw.y
 				};
-
-				// float3 ddepth_dTw = {s.x, s.y, 1.0};
+#if INTERSECT_DEPTH
+				float3 dz_dTw = {s.x, s.y, 1.0};
+#else
 				float3 dz_dTw = {0.0, 0.0, 1.0};
-				
+#endif
 				float dsx_dnorm = s.x * (-inv_norm);
 				float dsy_dnorm = s.y * (-inv_norm);
 				float3 dnorm_dk = {l.y, -l.x, 0.0};

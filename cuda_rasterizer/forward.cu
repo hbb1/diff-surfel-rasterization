@@ -183,6 +183,10 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	radii[idx] = 0;
 	tiles_touched[idx] = 0;
 	
+#if BACK_FACE_CULLING
+	if (opacities[idx]  < 0.0001) return;
+#endif
+
 	float4 intrins = {focal_x, focal_y, float(W)/2.0, float(H)/2.0};
 	glm::vec3 p_world = glm::vec3(orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2]);
 	glm::vec3 scale = scales[idx];
@@ -308,6 +312,7 @@ renderCUDA(
 	float D = { 0 };
 	float N[3] = {0};
 	float distortion = { 0 };
+	float distortN = { 0 };
 #endif
 
 	// Iterate over batches until all done or range is complete
@@ -360,9 +365,12 @@ renderCUDA(
 			float rho = min(rho3d, rho2d);
 			
 			// compute accurate depth when necessary
+#if INTERSECT_DEPTH
 			// float depth = (s.x * Tw.x + s.y * Tw.y) + Tw.z;
-			// float depth = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z;
-			float depth = Tw.z;
+			float depth = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z; // splat depth
+#else
+			float depth = Tw.z; // center depth
+#endif
 			float4 con_o = collected_conic_opacity[j];
 			float normal[3] = {con_o.x, con_o.y, con_o.z};
 			float power = -0.5f * rho;
@@ -389,7 +397,14 @@ renderCUDA(
 			// render distortion map
 			float A = 1-T;
 			float error = depth * A - D;
+			float normal_error =  A - (normal[0] * N[0] + normal[1] * N[1] + normal[2] * N[2]);
+#if INTERSECT_DEPTH
+			error = abs(error);
+			if (abs(error) < SMOOTH_THRESHOLD) // numerical stable
+				error = 0.0f;
+#endif
 			distortion += error * alpha * T;
+			distortN += normal_error * alpha * T;
 			// if (collected_id[j] > 0 && pix.x == W / 4 && pix.y == H / 2) {
 				// printf("%d forward %d %d\n", contributor, pix.x, pix.y);
 				// printf("%d forward %d normal %.4f %.4f %.4f\n", contributor, normal[0], normal[1], normal[2]);
@@ -439,6 +454,7 @@ renderCUDA(
 		out_depth[pix_id + ALPHA_OFFSET * H * W] = 1 - T;
 		for (int ch=0; ch<3; ch++) out_depth[pix_id + (NORMAL_OFFSET+ch) * H * W] = N[ch];
 		out_depth[pix_id + DISTORTION_OFFSET * H * W] = distortion;
+		out_depth[pix_id + DISTNORMAL_OFFSET * H * W] = distortN;
 #endif
 	}
 }

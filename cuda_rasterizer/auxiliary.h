@@ -21,13 +21,17 @@
 // #define FilterSize 0.33333 // * 0.5 // sqrt(2) / 2
 #define FilterSize 0.7071067811865476
 #define FilterInvSquare 1/(FilterSize*FilterSize)
-
+#define INTERSECT_DEPTH 0 // if use accurate depth or center depth
+#define BACK_FACE_CULLING 1
 #define TIGHTBBOX 1
 #define RENDER_AXUTILITY 1
 #define DEPTH_OFFSET 0
 #define ALPHA_OFFSET 1
 #define NORMAL_OFFSET 2 
 #define DISTORTION_OFFSET 5
+#define DISTNORMAL_OFFSET 6
+
+// #define SMOOTH_THRESHOLD 0.0001
 
 // Spherical harmonics coefficients
 __device__ const float SH_C0 = 0.28209479177387814f;
