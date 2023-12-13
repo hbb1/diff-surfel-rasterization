@@ -169,7 +169,7 @@ renderCUDA(
 	const uint2 pix_max = { min(pix_min.x + BLOCK_X, W), min(pix_min.y + BLOCK_Y , H) };
 	const uint2 pix = { pix_min.x + block.thread_index().x, pix_min.y + block.thread_index().y };
 	const uint32_t pix_id = W * pix.y + pix.x;
-	const float2 pixf = { (float)pix.x, (float)pix.y };
+	const float2 pixf = { (float)pix.x + 0.5, (float)pix.y + 0.5};
 
 	const bool inside = pix.x < W&& pix.y < H;
 	const uint2 range = ranges[block.group_index().y * horizontal_blocks + block.group_index().x];
@@ -346,11 +346,11 @@ renderCUDA(
 			float A_final = (1-T_final);
 			float multiplier = 1.0f;
 
-#if INTERSECT_DEPTH
-			multiplier *= ((A == 0) || (c_d * A - D >= 0)) ? 1.0f : -1.0f;
-			if (abs(c_d * A - D) < SMOOTH_THRESHOLD) // numerical stable
-				multiplier = 0.0f;
-#endif
+// #if INTERSECT_DEPTH
+// 			multiplier *= ((A == 0) || (c_d * A - D >= 0)) ? 1.0f : -1.0f;
+// 			if (abs(c_d * A - D) < SMOOTH_THRESHOLD) // numerical stable
+// 				multiplier = 0.0f;
+// #endif
 
 			float A_error = (A + A_last - A_final) * dL_dreg * multiplier;
 			float D_error = (D + D_last - D_final) * dL_dreg * multiplier;

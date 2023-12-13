@@ -280,7 +280,7 @@ renderCUDA(
 	uint2 pix_max = { min(pix_min.x + BLOCK_X, W), min(pix_min.y + BLOCK_Y , H) };
 	uint2 pix = { pix_min.x + block.thread_index().x, pix_min.y + block.thread_index().y };
 	uint32_t pix_id = W * pix.y + pix.x;
-	float2 pixf = { (float)pix.x, (float)pix.y };
+	float2 pixf = { (float)pix.x + 0.5, (float)pix.y + 0.5};
 
 	// Check if this thread is associated with a valid pixel or outside.
 	bool inside = pix.x < W&& pix.y < H;
@@ -399,28 +399,26 @@ renderCUDA(
 			float error = depth * A - D;
 			float normal_error =  A - (normal[0] * N[0] + normal[1] * N[1] + normal[2] * N[2]);
 #if INTERSECT_DEPTH
-			error = abs(error);
-			if (abs(error) < SMOOTH_THRESHOLD) // numerical stable
-				error = 0.0f;
+			// error = abs(error);
+			// if (abs(error) < SMOOTH_THRESHOLD) // numerical stable
+			// 	error = 0.0f;
 #endif
 			distortion += error * alpha * T;
-			distortN += normal_error * alpha * T;
-			// if (collected_id[j] > 0 && pix.x == W / 4 && pix.y == H / 2) {
-				// printf("%d forward %d %d\n", contributor, pix.x, pix.y);
-				// printf("%d forward %d normal %.4f %.4f %.4f\n", contributor, normal[0], normal[1], normal[2]);
-				// printf("%d forward %d A %.8f\n", contributor, collected_id[j], A);
-			// 	printf("%d forward %d depth %.8f\n", contributor, collected_id[j], depth);
-			// 	printf("%d forward %d D %.8f\n", contributor, collected_id[j], D);
-			// 	printf("%d forward %d alpha %.8f\n", contributor, collected_id[j], alpha);
-			// 	// printf("%d forward %d color [%.8f, %.8f, %.8f]\n", contributor, collected_id[j], features[collected_id[j] * CHANNELS + 0], features[collected_id[j] * CHANNELS + 1], features[collected_id[j] * CHANNELS + 2]);
-			// 	// printf("%d forward %d rgb [%.8f, %.8f, %.8f]\n", contributor, collected_id[j], C[0], C[1], C[2]);
-			// 	printf("%d forward %d last_alpha %.8f\n", contributor, collected_id[j], 1-T);
-			// 	printf("%d forward %d A %.8f\n", contributor, collected_id[j], A);
-			// 	printf("%d forward %d error %.8f\n", contributor, collected_id[j], error);
-			// 	printf("%d forward %d loss %.8f\n", contributor, collected_id[j], distortion);
-				// printf("-----------\n");
-			// }
-			
+#if DEBUG
+			if (collected_id[j] > 0 && pix.x == W / 4 && pix.y == H / 2) {
+				printf("%d forward %d %d\n", contributor, pix.x, pix.y);
+				printf("%d forward %d normal %.4f %.4f %.4f\n", contributor, normal[0], normal[1], normal[2]);
+				printf("%d forward %d A %.8f\n", contributor, collected_id[j], A);
+				printf("%d forward %d depth %.8f\n", contributor, collected_id[j], depth);
+				printf("%d forward %d D %.8f\n", contributor, collected_id[j], D);
+				printf("%d forward %d alpha %.8f\n", contributor, collected_id[j], alpha);
+				printf("%d forward %d last_alpha %.8f\n", contributor, collected_id[j], 1-T);
+				printf("%d forward %d A %.8f\n", contributor, collected_id[j], A);
+				printf("%d forward %d error %.8f\n", contributor, collected_id[j], error);
+				printf("%d forward %d loss %.8f\n", contributor, collected_id[j], distortion);
+				printf("-----------\n");
+			}
+#endif
 			// render normal map
 			for (int ch=0; ch<3; ch++) N[ch] += normal[ch] * alpha * T;
 
@@ -454,7 +452,6 @@ renderCUDA(
 		out_depth[pix_id + ALPHA_OFFSET * H * W] = 1 - T;
 		for (int ch=0; ch<3; ch++) out_depth[pix_id + (NORMAL_OFFSET+ch) * H * W] = N[ch];
 		out_depth[pix_id + DISTORTION_OFFSET * H * W] = distortion;
-		out_depth[pix_id + DISTNORMAL_OFFSET * H * W] = distortN;
 #endif
 	}
 }
