@@ -397,7 +397,6 @@ renderCUDA(
 			// render distortion map
 			float A = 1-T;
 			float error = depth * A - D;
-			float normal_error =  A - (normal[0] * N[0] + normal[1] * N[1] + normal[2] * N[2]);
 #if INTERSECT_DEPTH
 			// error = abs(error);
 			// if (abs(error) < SMOOTH_THRESHOLD) // numerical stable

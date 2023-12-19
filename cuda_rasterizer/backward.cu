@@ -408,13 +408,17 @@ renderCUDA(
 #endif
 			if (rho3d <= rho2d) {
 				// Update gradients w.r.t. covariance of Gaussian 3x3 (T)
+#if INTERSECT_DEPTH
 				float2 dL_ds = {
 					dL_dG * -G * s.x + dL_dz * Tw.x,
 					dL_dG * -G * s.y + dL_dz * Tw.y
 				};
-#if INTERSECT_DEPTH
 				float3 dz_dTw = {s.x, s.y, 1.0};
 #else
+				float2 dL_ds = {
+					dL_dG * -G * s.x,
+					dL_dG * -G * s.y
+				};
 				float3 dz_dTw = {0.0, 0.0, 1.0};
 #endif
 				float dsx_dnorm = s.x * (-inv_norm);
