@@ -555,14 +555,11 @@ inline __device__ void computeCov3D(
 	glm::vec3 dL_dRS0 = glm::transpose(W) * dL_dM[0];
 	glm::vec3 dL_dRS1 = glm::transpose(W) * dL_dM[1];
 	glm::vec3 dL_dpw = glm::transpose(W) * dL_dM[2];
+	glm::vec3 dL_dtn = glm::transpose(W) * glm::vec3(dL_dnormal3D[0], dL_dnormal3D[1], dL_dnormal3D[2]);
 	glm::mat3 dL_dR = glm::mat3(
 		dL_dRS0 * glm::vec3(scale.x),
 		dL_dRS1 * glm::vec3(scale.y),
-#if RENDER_AXUTILITY
-		glm::vec3(dL_dnormal3D[0], dL_dnormal3D[1], dL_dnormal3D[2])
-#else
-		glm::vec3(0.f)
-#endif
+		dL_dtn
 	);
 
 	dL_drot = quat_to_rotmat_vjp(quat, dL_dR);

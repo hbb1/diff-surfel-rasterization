@@ -93,7 +93,8 @@ __device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, co
 	// don't draw if the matrix is singular
 	// if (glm::determinant(M) == 0.0f) return false;
 	// back face culling ? or parallel face culling?
-	if (glm::dot(W*R[2], M[2]) == 0.0f) return false;
+	glm::vec3 tn = W*R[2];
+	if (glm::dot(tn, M[2]) == 0.0f) return false;
 
 	glm::mat4x3 T = glm::transpose(P * glm::mat3x4(
 		glm::vec4(M[0], 0.0),
@@ -110,7 +111,7 @@ __device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, co
 	cov3D[6] = T[2].x;
 	cov3D[7] = T[2].y;
 	cov3D[8] = T[2].z;
-	normal = {R[2].x, R[2].y, R[2].z};
+	normal = {tn.x, tn.y, tn.z};
 	return true;
 }
 
