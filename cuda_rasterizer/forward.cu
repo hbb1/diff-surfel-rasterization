@@ -263,6 +263,7 @@ renderCUDA(
 	const uint2* __restrict__ ranges,
 	const uint32_t* __restrict__ point_list,
 	int W, int H,
+	float focal_x, float focal_y,
 	const float2* __restrict__ points_xy_image,
 	const float* __restrict__ features,
 	const float* __restrict__ cov3Ds,
@@ -312,8 +313,10 @@ renderCUDA(
 	// render axutility ouput
 	float D = { 0 };
 	float N[3] = {0};
-	float distortion = { 0 };
-	float distortN = { 0 };
+	float D2 = {0};
+	float distortion = {0};
+	float max_weight = {0};
+	// float2 SDF = {0.0, 0.0};
 #endif
 
 	// Iterate over batches until all done or range is complete
@@ -395,15 +398,21 @@ renderCUDA(
 
 
 #if RENDER_AXUTILITY
-			// render distortion map
+// render distortion map
 			float A = 1-T;
-			float error = depth * A - D;
-#if INTERSECT_DEPTH
-			// error = abs(error);
-			// if (abs(error) < SMOOTH_THRESHOLD) // numerical stable
-			// 	error = 0.0f;
-#endif
+			float error = depth * depth * A + D2 - 2 * depth * D;
 			distortion += error * alpha * T;
+
+			if (alpha * T >= max_weight) {
+				max_weight = alpha * T;
+			}
+			// render sdf map
+			// glm::vec3 dir = glm::vec3((pixf.x - 0.5*float(W)) / focal_x, (pixf.y-0.5*float(H)) / focal_y, 1);
+			// dir = dir / glm::length(dir);
+			// float cos = glm::dot(glm::vec3(normal[0], normal[1], normal[2]), -dir);
+			// // cos = max(cos, 0.0f);
+			// SDF.x += depth * cos * alpha * T;
+			// SDF.y += cos * alpha * T;
 #if DEBUG
 			if (collected_id[j] > 0 && pix.x == W / 4 && pix.y == H / 2) {
 				printf("%d forward %d %d\n", contributor, pix.x, pix.y);
@@ -424,6 +433,7 @@ renderCUDA(
 
 			// render depth map
 			D += depth * alpha * T;
+			D2 += depth * depth * alpha * T;
 #endif
 
 			// Eq. (3) from 3D Gaussian splatting paper.
@@ -448,10 +458,12 @@ renderCUDA(
 
 #if RENDER_AXUTILITY
 		final_T[pix_id + H * W] = D;
+		final_T[pix_id + 2 * H * W] = D2;
 		out_depth[pix_id + DEPTH_OFFSET * H * W] = D;
 		out_depth[pix_id + ALPHA_OFFSET * H * W] = 1 - T;
 		for (int ch=0; ch<3; ch++) out_depth[pix_id + (NORMAL_OFFSET+ch) * H * W] = N[ch];
 		out_depth[pix_id + DISTORTION_OFFSET * H * W] = distortion;
+		out_depth[pix_id + MAXW_OFFSET * H * W] = max_weight;
 #endif
 	}
 }
@@ -461,6 +473,7 @@ void FORWARD::render(
 	const uint2* ranges,
 	const uint32_t* point_list,
 	int W, int H,
+	float focal_x, float focal_y,
 	const float2* means2D,
 	const float* colors,
 	const float* cov3Ds,
@@ -476,6 +489,7 @@ void FORWARD::render(
 		ranges,
 		point_list,
 		W, H,
+		focal_x, focal_y,
 		means2D,
 		colors,
 		cov3Ds,

@@ -146,6 +146,7 @@ renderCUDA(
 	const uint2* __restrict__ ranges,
 	const uint32_t* __restrict__ point_list,
 	int W, int H,
+	float focal_x, float focal_y,
 	const float* __restrict__ bg_color,
 	const float2* __restrict__ points_xy_image,
 	const float4* __restrict__ conic_opacity,
@@ -206,12 +207,16 @@ renderCUDA(
 	float dL_ddepth;
 	float dL_daccum;
 	float dL_dnormal2D[3];
+	// float dL_dcos_norm;
+	// float dL_dcos_depth;
 	if (inside) {
 		dL_ddepth = dL_depths[DEPTH_OFFSET * H * W + pix_id];
 		dL_daccum = dL_depths[ALPHA_OFFSET * H * W + pix_id];
 		dL_dreg = dL_depths[DISTORTION_OFFSET * H * W + pix_id];
 		for (int i = 0; i < 3; i++) 
 			dL_dnormal2D[i] = dL_depths[(NORMAL_OFFSET + i) * H * W + pix_id];
+		// dL_dcos_depth = dL_depths[DISTORTION_OFFSET * H * W + pix_id];
+		// dL_dcos_norm = dL_depths[DISTNORM_OFFSET * H * W + pix_id];
 	}
 
 	// for compute gradient with respect to depth and normal
@@ -220,10 +225,12 @@ renderCUDA(
 	float accum_depth_rec = 0;
 	float accum_alpha_rec = 0;
 	float accum_normal_rec[3] = {0};
-
+	// float accum_cos_depth_rec = 0;
+	// float accum_cos_norm_rec = 0;
 	// for compute gradient with respect to the distortion map
-	const float D_final = inside ? final_Ts[pix_id + H * W] : 0;
-	float D = D_final;
+	const float final_D = inside ? final_Ts[pix_id + H * W] : 0;
+	const float final_D2 = inside ? final_Ts[pix_id + 2 * H * W] : 0;
+	const float final_A = 1 - T_final;
 	float last_dL_dT = 0;
 #endif
 
@@ -312,7 +319,6 @@ renderCUDA(
 			if (alpha < 1.0f / 255.0f)
 				continue;
 
-			float T_last = T;
 			T = T / (1.f - alpha);
 			const float dchannel_dcolor = alpha * T;
 
@@ -336,28 +342,49 @@ renderCUDA(
 				atomicAdd(&(dL_dcolors[global_id * C + ch]), dchannel_dcolor * dL_dchannel);
 			}
 
+			float dL_dz = 0.0f;
 #if RENDER_AXUTILITY
-			// Propagate gradients w.r.t ray-splat distortions
-			float D_last = D;
-			D = D - T * alpha * c_d;
-			float w = T * alpha;
-			float A = (1-T);
-			float A_last = (1-T_last);
-			float A_final = (1-T_final);
-			float multiplier = 1.0f;
 
-// #if INTERSECT_DEPTH
-// 			multiplier *= ((A == 0) || (c_d * A - D >= 0)) ? 1.0f : -1.0f;
-// 			if (abs(c_d * A - D) < SMOOTH_THRESHOLD) // numerical stable
-// 				multiplier = 0.0f;
-// #endif
-
-			float A_error = (A + A_last - A_final) * dL_dreg * multiplier;
-			float D_error = (D + D_last - D_final) * dL_dreg * multiplier;
-			float dL_dweight = A_error * c_d - D_error;
+			// D = D - T * alpha * c_d;
+			// D2 = D2 - T * alpha * c_d * c_d;
+			float dL_dweight = (final_D2 + c_d * c_d * final_A - 2 * c_d * final_D) * dL_dreg;
 			dL_dalpha += dL_dweight - last_dL_dT;
-
+			// propagate the current weight W_{i} to next weight W_{i-1}
 			last_dL_dT = dL_dweight * alpha + (1 - alpha) * last_dL_dT;
+			dL_dz += 2.0f * (T * alpha) * (c_d * final_A - final_D) * dL_dreg;
+
+			// float w = T * alpha;
+			// float A = (1-T);
+			// float A_last = (1-T_last);
+			// float A_final = (1-T_final);
+
+			// float A_error = (A + A_last - A_final) * dL_dreg;
+			// float D_error = (D + D_last - D_final) * dL_dreg;
+			// float dL_dweight = A_error * c_d - D_error;
+			// dL_dalpha += dL_dweight - last_dL_dT;
+			// last_dL_dT = dL_dweight * alpha + (1 - alpha) * last_dL_dT;
+
+			// compute ray-splat cosines
+			// glm::vec3 dir = glm::vec3((pixf.x - 0.5*float(W)) / focal_x, (pixf.y-0.5*float(H)) / focal_y, 1);
+			// dir = dir / glm::length(dir);
+			// float cos = glm::dot(glm::vec3(normal[0], normal[1], normal[2]), -dir);
+			// float clamp = 1.0f;
+
+			// // Propagate gradients w.r.t ray-splat distortions
+			// accum_cos_depth_rec = last_alpha * last_cos * last_depth + (1.f - last_alpha) * accum_cos_depth_rec;
+			// accum_cos_norm_rec = last_alpha * last_cos + (1.f - last_alpha) * accum_cos_norm_rec;
+			// last_cos = cos;
+			// dL_dalpha += (cos * c_d - accum_cos_depth_rec) * dL_dcos_depth;
+			// dL_dalpha += (cos - accum_cos_norm_rec) * dL_dcos_norm;
+
+			// float dL_dcos = c_d * alpha * T * dL_dcos_depth;
+			// dL_dcos += alpha * T * dL_dcos_norm;
+			// dL_dcos *= clamp;
+
+			// dL_dz += cos * alpha * T * dL_dcos_depth;
+			// atomicAdd((&dL_dnormal3D[global_id * 3 + 0]), -dir.x * dL_dcos);
+			// atomicAdd((&dL_dnormal3D[global_id * 3 + 1]), -dir.y * dL_dcos);
+			// atomicAdd((&dL_dnormal3D[global_id * 3 + 2]), -dir.z * dL_dcos);
 
 			// Propagate gradients w.r.t ray-splat depths
 			accum_depth_rec = last_alpha * last_depth + (1.f - last_alpha) * accum_depth_rec;
@@ -390,22 +417,19 @@ renderCUDA(
 
 			// Helpful reusable temporary variables
 			const float dL_dG = con_o.w * dL_dalpha;
-			float dL_dz = alpha * T * dL_ddepth; 
+			dL_dz += alpha * T * dL_ddepth; 
 
-#if RENDER_AXUTILITY
-			dL_dz += w * A_error;
-			// if (collected_id[j] > 0 && pix.x == W / 4 && pix.y == H / 2) {
-			// 	printf("%d backward %d A %.8f\n", contributor, collected_id[j], A);
-			// 	printf("%d backward %d depth %.8f\n", contributor, collected_id[j], c_d);
-			// 	printf("%d backward %d D %.8f\n", contributor, collected_id[j], D);
-			// 	printf("%d backward %d T %.8f\n", contributor, collected_id[j], T);
-			// 	printf("%d backward %d dL_dalpha %.8f\n", contributor, collected_id[j], dL_dalpha);
-			// 	printf("%d backward %d dL_dz %.8f\n", contributor, collected_id[j], dL_dz);
-			// 	// printf("%d backward %d multiplier %.8f\n", contributor, collected_id[j], multiplier);
-			// 	// printf("%d backward %d depth %.4f\n", contributor, collected_id[j], c_d);
-			// 	printf("-----------\n");
-			// }
+#if DEBUG
+			if (collected_id[j] > 0 && pix.x == W / 4 && pix.y == H / 2) {
+				printf("%d backward %d depth %.8f\n", contributor, collected_id[j], c_d);
+				// printf("%d backward %d D %.8f\n", contributor, collected_id[j], D);
+				printf("%d backward %d T %.8f\n", contributor, collected_id[j], T);
+				printf("%d backward %d dL_dalpha %.8f\n", contributor, collected_id[j], dL_dalpha);
+				printf("%d backward %d dL_dz %.8f\n", contributor, collected_id[j], dL_dz);
+				printf("-----------\n");
+			}
 #endif
+
 			if (rho3d <= rho2d) {
 				// Update gradients w.r.t. covariance of Gaussian 3x3 (T)
 #if INTERSECT_DEPTH
@@ -780,6 +804,7 @@ void BACKWARD::render(
 	const uint2* ranges,
 	const uint32_t* point_list,
 	int W, int H,
+	float focal_x, float focal_y,
 	const float* bg_color,
 	const float2* means2D,
 	const float4* conic_opacity,
@@ -800,6 +825,7 @@ void BACKWARD::render(
 		ranges,
 		point_list,
 		W, H,
+		focal_x, focal_y,
 		bg_color,
 		means2D,
 		conic_opacity,

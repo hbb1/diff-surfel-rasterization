@@ -172,7 +172,7 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& ch
 CudaRasterizer::ImageState CudaRasterizer::ImageState::fromChunk(char*& chunk, size_t N)
 {
 	ImageState img;
-	obtain(chunk, img.accum_alpha, N * 2, 128);
+	obtain(chunk, img.accum_alpha, N * 3, 128);
 	obtain(chunk, img.n_contrib, N, 128);
 	obtain(chunk, img.ranges, N, 128);
 	return img;
@@ -326,6 +326,7 @@ int CudaRasterizer::Rasterizer::forward(
 		imgState.ranges,
 		binningState.point_list,
 		width, height,
+		focal_x, focal_y,
 		geomState.means2D,
 		feature_ptr,
 		cov3D_ptr,
@@ -401,6 +402,7 @@ void CudaRasterizer::Rasterizer::backward(
 		imgState.ranges,
 		binningState.point_list,
 		width, height,
+		focal_x, focal_y,
 		background,
 		geomState.means2D,
 		geomState.conic_opacity,
