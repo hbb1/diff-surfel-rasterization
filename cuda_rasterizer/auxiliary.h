@@ -31,6 +31,7 @@
 #define DISTORTION_OFFSET 5
 #define MAXW_OFFSET 6
 #define DEBUG 0
+#define DUAL_VISIABLE 1
 // #define SMOOTH_THRESHOLD 0.0001
 
 // Spherical harmonics coefficients

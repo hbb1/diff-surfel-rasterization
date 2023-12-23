@@ -94,7 +94,13 @@ __device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, co
 	// if (glm::determinant(M) == 0.0f) return false;
 	// back face culling ? or parallel face culling?
 	glm::vec3 tn = W*R[2];
-	if (glm::dot(tn, M[2]) == 0.0f) return false;
+	float cos = glm::dot(-tn, M[2]);
+	if (cos == 0.0f) return false;
+
+#if DUAL_VISIABLE
+	float multiplier = cos > 0 ? 1 : -1;
+	tn *= multiplier;
+#endif
 
 	glm::mat4x3 T = glm::transpose(P * glm::mat3x4(
 		glm::vec4(M[0], 0.0),

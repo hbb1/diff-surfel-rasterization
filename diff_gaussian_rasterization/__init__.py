@@ -205,7 +205,9 @@ class GaussianRasterizer(nn.Module):
         if rotations is None:
             rotations = torch.Tensor([]).cuda()
         if cov3D_precomp is None:
-            cov3D_precomp = torch.Tensor([]).cuda()
+            pass
+        
+        cov3D_precomp = torch.Tensor([]).cuda()
 
         # Invoke C++/CUDA rasterization routine
         return rasterize_gaussians(

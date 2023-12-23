@@ -580,6 +580,14 @@ inline __device__ void computeCov3D(
 	glm::vec3 dL_dRS1 = glm::transpose(W) * dL_dM[1];
 	glm::vec3 dL_dpw = glm::transpose(W) * dL_dM[2];
 	glm::vec3 dL_dtn = glm::transpose(W) * glm::vec3(dL_dnormal3D[0], dL_dnormal3D[1], dL_dnormal3D[2]);
+
+#if DUAL_VISIABLE
+	glm::vec3 tn = W*R[2];
+	float cos = glm::dot(-tn, M[2]);
+	float multiplier = cos > 0 ? 1 : -1;
+	dL_dtn *= multiplier;
+#endif
+
 	glm::mat3 dL_dR = glm::mat3(
 		dL_dRS0 * glm::vec3(scale.x),
 		dL_dRS1 * glm::vec3(scale.y),
