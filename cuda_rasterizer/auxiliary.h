@@ -32,6 +32,10 @@
 #define MAXW_OFFSET 6
 #define DEBUG 0
 #define DUAL_VISIABLE 1
+#define NEAR_PLANE 0.2f
+#define VIEW_FRUSTUM_CULLING 1
+#define HARD_CULLING 1
+#define CLIP_THRESH 1.1f
 // #define SMOOTH_THRESHOLD 0.0001
 
 // Spherical harmonics coefficients

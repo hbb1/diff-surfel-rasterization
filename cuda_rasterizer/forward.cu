@@ -71,7 +71,7 @@ __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const 
 }
 
 
-__device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, const glm::vec3 &scale, const float *viewmat, const float4 &intrins, float* cov3D, float3 &normal) {
+__device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, const glm::vec3 &scale, const float *viewmat, const float4 &intrins, float tan_fovx, float tan_fovy, float* cov3D, float3 &normal) {
 	// camera information 
 	const glm::mat3 W = glm::mat3(
 		viewmat[0],viewmat[1],viewmat[2],
@@ -79,7 +79,7 @@ __device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, co
 		viewmat[8],viewmat[9],viewmat[10]
 	); // viewmat 
 
-	// const glm::vec3 px = glm::vec3(p_world.x, p_world.y, p_world.z);            // center
+
 	const glm::vec3 cam_pos = glm::vec3(viewmat[12], viewmat[13], viewmat[14]); // camera center
 	const glm::mat4 P = glm::mat4(
 		intrins.x, 0.0, 0.0, 0.0,
@@ -88,13 +88,34 @@ __device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, co
 		0.0, 0.0, 0.0, 0.0
 	);
 
+	glm::vec3 p_view = W * p_world + cam_pos;
 	glm::mat3 R = quat_to_rotmat(quat) * scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
-	glm::mat3 M = glm::mat3(W * R[0], W * R[1], W * p_world + cam_pos);
+
+#if VIEW_FRUSTUM_CULLING
+	// culing spalt that outside the view frustum
+	const float limx = CLIP_THRESH * tan_fovx;
+	const float limy = CLIP_THRESH * tan_fovy;
+#if HARD_CULLING
+	const float pxpz = (p_view.x + r) / p_view.z;
+	const float pypz = (p_view.y + r) / p_view.z;
+	const float r = max(glm::length(R[0]), glm::length(R[1]));
+	if (pxpz < -limx || pxpz > limx || pypz < -limy || pypz > limy) {
+		return false;
+	}
+#else
+	const float pxpz = (p_view.x) / p_view.z;
+	const float pypz = (p_view.y) / p_view.z;
+	p_view.x = min(limx, max(-limx, pxpz)) * p_view.z;
+	p_view.y = min(limy, max(-limy, pypz)) * p_view.z;
+#endif
+#endif
+
+	glm::mat3 M = glm::mat3(W * R[0], W * R[1], p_view);
 	// don't draw if the matrix is singular
 	// if (glm::determinant(M) == 0.0f) return false;
 	// back face culling ? or parallel face culling?
 	glm::vec3 tn = W*R[2];
-	float cos = glm::dot(-tn, M[2]);
+	float cos = glm::dot(-tn, p_view);
 	if (cos == 0.0f) return false;
 
 #if DUAL_VISIABLE
@@ -194,15 +215,15 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	if (opacities[idx]  < 0.0001) return;
 #endif
 
-	float4 intrins = {focal_x, focal_y, float(W)/2.0, float(H)/2.0};
 	glm::vec3 p_world = glm::vec3(orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2]);
-	glm::vec3 scale = scales[idx];
-	glm::vec4 quat = rotations[idx];
 	// Perform near culling, quit if outside.
 	float3 p_view;
 	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, prefiltered, p_view))
 		return;
 	
+	float4 intrins = {focal_x, focal_y, float(W)/2.0, float(H)/2.0};
+	glm::vec3 scale = scales[idx];
+	glm::vec4 quat = rotations[idx];
 	// view frustum cullling TODO
 	const float* cov3D;
 	bool ok;
@@ -213,7 +234,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	}
 	else
 	{
-		ok = computeCov3D(p_world, quat, scale, viewmatrix, intrins, cov3Ds + idx * 9, normal);
+		ok = computeCov3D(p_world, quat, scale, viewmatrix, intrins, tan_fovx, tan_fovy, cov3Ds + idx * 9, normal);
 		if (!ok) return;
 		cov3D = cov3Ds + idx * 9;
 	}
@@ -378,6 +399,7 @@ renderCUDA(
 #if INTERSECT_DEPTH
 			// float depth = (s.x * Tw.x + s.y * Tw.y) + Tw.z;
 			float depth = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z; // splat depth
+			// if (depth < NEAR_PLANE) continue;
 #else
 			float depth = Tw.z; // center depth
 #endif
@@ -431,6 +453,7 @@ renderCUDA(
 				printf("%d forward %d A %.8f\n", contributor, collected_id[j], A);
 				printf("%d forward %d error %.8f\n", contributor, collected_id[j], error);
 				printf("%d forward %d loss %.8f\n", contributor, collected_id[j], distortion);
+				printf("%d forward %d contrib %d\n", contributor, collected_id[j], max_contributor);
 				printf("-----------\n");
 			}
 #endif

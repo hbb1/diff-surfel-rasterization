@@ -426,6 +426,7 @@ renderCUDA(
 				printf("%d backward %d T %.8f\n", contributor, collected_id[j], T);
 				printf("%d backward %d dL_dalpha %.8f\n", contributor, collected_id[j], dL_dalpha);
 				printf("%d backward %d dL_dz %.8f\n", contributor, collected_id[j], dL_dz);
+				printf("%d backward %d max_contrib %d\n", contributor, collected_id[j], max_contributor);
 				printf("-----------\n");
 			}
 #endif
@@ -534,6 +535,8 @@ inline __device__ void computeCov3D(
 	const glm::vec3 & scale,
 	const float* viewmat,
 	const float4 & intrins,
+	float tan_fovx, 
+	float tan_fovy,
 	const float* cov3D,
 	const float* dL_dcov3D,
 	const float* dL_dnormal3D,
@@ -559,7 +562,17 @@ inline __device__ void computeCov3D(
 	glm::mat3 S = scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
 	glm::mat3 R = quat_to_rotmat(quat);
 	glm::mat3 RS = R * S;
-	glm::mat3 M = glm::mat3(W * RS[0], W * RS[1], W * p_world + cam_pos);
+	glm::vec3 p_view = W * p_world + cam_pos;
+#if CLIP
+	const float limx = 1.3f * tan_fovx;
+	const float limy = 1.3f * tan_fovy;
+	const float pxpz = p_view.x / p_view.z;
+	const float pypz = p_view.y / p_view.z;
+	p_view.x = min(limx, max(-limx, pxpz)) * p_view.z;
+	p_view.y = min(limy, max(-limy, pypz)) * p_view.z;
+#endif
+
+	glm::mat3 M = glm::mat3(W * RS[0], W * RS[1], p_view);
 
 
 	glm::mat4x3 dL_dT = glm::mat4x3(
@@ -595,13 +608,19 @@ inline __device__ void computeCov3D(
 	);
 
 	dL_drot = quat_to_rotmat_vjp(quat, dL_dR);
-	dL_dmean3D = dL_dpw;
 	dL_dscale = glm::vec3(
 		(float)glm::dot(dL_dRS0, R[0]),
 		(float)glm::dot(dL_dRS1, R[1]),
 		0.0f
 	);
 
+#if CLIP
+	const float x_grad_mul = pxpz < -limx || pxpz > limx ? 0 : 1;
+	const float y_grad_mul = pypz < -limy || pypz > limy ? 0 : 1;
+	dL_dpw.x *= x_grad_mul;
+	dL_dpw.y *= y_grad_mul;
+#endif
+	dL_dmean3D = dL_dpw;
 	// unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
 	// if (idx == 0) {
 	// 		glm::mat4x3 T = glm::transpose(P * glm::mat3x4(
@@ -670,6 +689,8 @@ __global__ void preprocessCUDA(
 		scales[idx],
 		viewmatrix,
 		intrins,
+		tan_fovx,
+		tan_fovy,
 		cov3D, 
 		dL_dcov3D,
 		dL_dnormal3D,
