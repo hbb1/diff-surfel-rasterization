@@ -93,16 +93,18 @@ __device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, co
 
 #if VIEW_FRUSTUM_CULLING
 	// culing spalt that outside the view frustum
-	const float limx = CLIP_THRESH * tan_fovx;
-	const float limy = CLIP_THRESH * tan_fovy;
 #if HARD_CULLING
-	const float pxpz = (p_view.x + r) / p_view.z;
-	const float pypz = (p_view.y + r) / p_view.z;
-	const float r = max(glm::length(R[0]), glm::length(R[1]));
+	const float pxpz = (p_view.x) / p_view.z;
+	const float pypz = (p_view.y) / p_view.z;
+	const float r = max(glm::length(R[0]), glm::length(R[1])) / p_view.z;
+	const float limx = CLIP_THRESH * tan_fovx + r;
+	const float limy = CLIP_THRESH * tan_fovy + r;
 	if (pxpz < -limx || pxpz > limx || pypz < -limy || pypz > limy) {
 		return false;
 	}
 #else
+	const float limx = CLIP_THRESH * tan_fovx;
+	const float limy = CLIP_THRESH * tan_fovy;
 	const float pxpz = (p_view.x) / p_view.z;
 	const float pypz = (p_view.y) / p_view.z;
 	p_view.x = min(limx, max(-limx, pxpz)) * p_view.z;
@@ -340,9 +342,12 @@ renderCUDA(
 	// render axutility ouput
 	float D = { 0 };
 	float N[3] = {0};
-	float D2 = {0};
+	float dist1 = {0};
+	float dist2 = {0};
 	float distortion = {0};
+	float max_depth = {0};
 	float max_weight = {0};
+	float max_contributor = {0};
 	// float2 SDF = {0.0, 0.0};
 #endif
 
@@ -383,9 +388,10 @@ renderCUDA(
 			float3 k = {-Tu.x + pixf.x * Tw.x, -Tu.y + pixf.x * Tw.y, -Tu.z + pixf.x * Tw.z};
 			float3 l = {-Tv.x + pixf.y * Tw.x, -Tv.y + pixf.y * Tw.y, -Tv.z + pixf.y * Tw.z};
 
-			if ((k.x * l.y - k.y * l.x) == 0.0f) continue;
+			float norm = (k.x * l.y - k.y * l.x);
+			if (norm == 0.0f) continue;
 
-			float inv_norm = 1.0f / (k.x * l.y - k.y * l.x);
+			float inv_norm = 1.0f / norm;
 			float2 s = {(l.z * k.y - k.z * l.y) * inv_norm, -(l.z * k.x - k.z * l.x) * inv_norm};
 			float rho3d = (s.x * s.x + s.y * s.y); // splat distance
 			
@@ -399,7 +405,9 @@ renderCUDA(
 #if INTERSECT_DEPTH
 			// float depth = (s.x * Tw.x + s.y * Tw.y) + Tw.z;
 			float depth = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z; // splat depth
-			// if (depth < NEAR_PLANE) continue;
+#if SKIL_NEGATIVE
+			if (depth < NEAR_PLANE) continue;
+#endif
 #else
 			float depth = Tw.z; // center depth
 #endif
@@ -428,11 +436,18 @@ renderCUDA(
 #if RENDER_AXUTILITY
 // render distortion map
 			float A = 1-T;
-			float error = depth * depth * A + D2 - 2 * depth * D;
+#if MAPPED_Z
+			float mapped_depth = (FAR_PLANE * depth - FAR_PLANE * NEAR_PLANE) / ((FAR_PLANE - NEAR_PLANE) * depth);
+#else		
+			float mapped_depth = depth;
+#endif
+			float error = mapped_depth * mapped_depth * A + dist2 - 2 * mapped_depth * dist1;
 			distortion += error * alpha * T;
 
 			if (alpha * T >= max_weight) {
+				max_depth = depth;
 				max_weight = alpha * T;
+				max_contributor = contributor;
 			}
 			// render sdf map
 			// glm::vec3 dir = glm::vec3((pixf.x - 0.5*float(W)) / focal_x, (pixf.y-0.5*float(H)) / focal_y, 1);
@@ -453,6 +468,7 @@ renderCUDA(
 				printf("%d forward %d A %.8f\n", contributor, collected_id[j], A);
 				printf("%d forward %d error %.8f\n", contributor, collected_id[j], error);
 				printf("%d forward %d loss %.8f\n", contributor, collected_id[j], distortion);
+				printf("%d forward %d map_depth %.8f\n", contributor, collected_id[j], mapped_depth);
 				printf("%d forward %d contrib %d\n", contributor, collected_id[j], max_contributor);
 				printf("-----------\n");
 			}
@@ -462,7 +478,9 @@ renderCUDA(
 
 			// render depth map
 			D += depth * alpha * T;
-			D2 += depth * depth * alpha * T;
+			// mapped depth
+			dist1 += mapped_depth * alpha * T;
+			dist2 += mapped_depth * mapped_depth * alpha * T;
 #endif
 
 			// Eq. (3) from 3D Gaussian splatting paper.
@@ -486,13 +504,14 @@ renderCUDA(
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
 
 #if RENDER_AXUTILITY
+		n_contrib[pix_id + H * W] = max_contributor;
 		final_T[pix_id + H * W] = D;
 		final_T[pix_id + 2 * H * W] = D2;
 		out_depth[pix_id + DEPTH_OFFSET * H * W] = D;
 		out_depth[pix_id + ALPHA_OFFSET * H * W] = 1 - T;
 		for (int ch=0; ch<3; ch++) out_depth[pix_id + (NORMAL_OFFSET+ch) * H * W] = N[ch];
+		out_depth[pix_id + MAXDEPTH_OFFSET * H * W] = max_depth;
 		out_depth[pix_id + DISTORTION_OFFSET * H * W] = distortion;
-		out_depth[pix_id + MAXW_OFFSET * H * W] = max_weight;
 #endif
 	}
 }

@@ -287,9 +287,12 @@ renderCUDA(
 			float3 k = {-Tu.x + pixf.x * Tw.x, -Tu.y + pixf.x * Tw.y, -Tu.z + pixf.x * Tw.z};
 			float3 l = {-Tv.x + pixf.y * Tw.x, -Tv.y + pixf.y * Tw.y, -Tv.z + pixf.y * Tw.z};
 
-			if ((k.x * l.y - k.y * l.x) == 0.0f) continue;
+			// if ((k.x * l.y - k.y * l.x) == 0.0f) continue;
+			// float inv_norm = 1.0f / (k.x * l.y - k.y * l.x);
+			float norm = (k.x * l.y - k.y * l.x);
+			if (norm == 0.0f) continue;
 
-			float inv_norm = 1.0f / (k.x * l.y - k.y * l.x);
+			float inv_norm = 1.0f / norm;
 			float2 s = {(l.z * k.y - k.z * l.y) * inv_norm, -(l.z * k.x - k.z * l.x) * inv_norm};
 			float rho3d = (s.x * s.x + s.y * s.y); // splat distance
 			
@@ -304,6 +307,9 @@ renderCUDA(
 #if INTERSECT_DEPTH
 			// float c_d = (s.x * Tw.x + s.y * Tw.y) + Tw.z;
 			float c_d = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z;
+#if SKIL_NEGATIVE
+			if (depth < NEAR_PLANE) continue;
+#endif
 #else
 			float c_d = Tw.z;
 #endif
@@ -347,12 +353,27 @@ renderCUDA(
 
 			// D = D - T * alpha * c_d;
 			// D2 = D2 - T * alpha * c_d * c_d;
-			float dL_dweight = (final_D2 + c_d * c_d * final_A - 2 * c_d * final_D) * dL_dreg;
+			// float dL_dweight = 0.0f; // detach weight
+#if MAPPED_Z
+			float m_d = (FAR_PLANE * c_d - FAR_PLANE * NEAR_PLANE) / ((FAR_PLANE - NEAR_PLANE) * c_d);
+			float dmd_dd = (FAR_PLANE * NEAR_PLANE) / ((FAR_PLANE - NEAR_PLANE) * c_d);
+#else
+			float md = c_d;
+			float dmd_dd = 1;
+#endif
+			float dL_dweight = (final_D2 + m_d * m_d * final_A - 2 * m_d * final_D) * dL_dreg;
 			dL_dalpha += dL_dweight - last_dL_dT;
 			// propagate the current weight W_{i} to next weight W_{i-1}
 			last_dL_dT = dL_dweight * alpha + (1 - alpha) * last_dL_dT;
-			dL_dz += 2.0f * (T * alpha) * (c_d * final_A - final_D) * dL_dreg;
+			float dL_dmd = 2.0f * (T * alpha) * (m_d * final_A - final_D) * dL_dreg;
+			dL_dz += dL_dmd * dmd_dd;
 
+			if (contributor == max_contributor-1) {
+				dL_dz += dL_dmax_depth;
+				// for (int ch = 0; ch < 3; ch++) {
+					// atomicAdd((&dL_dnormal3D[global_id * 3 + ch]), alpha * T * dL_dmax_normal[ch]);
+				// }
+			}
 			// float w = T * alpha;
 			// float A = (1-T);
 			// float A_last = (1-T_last);
@@ -563,9 +584,10 @@ inline __device__ void computeCov3D(
 	glm::mat3 R = quat_to_rotmat(quat);
 	glm::mat3 RS = R * S;
 	glm::vec3 p_view = W * p_world + cam_pos;
-#if CLIP
-	const float limx = 1.3f * tan_fovx;
-	const float limy = 1.3f * tan_fovy;
+
+#if VIEW_FRUSTUM_CULLING and not HARD_CULLING
+	const float limx = CLIP_THRESH * tan_fovx;
+	const float limy = CLIP_THRESH * tan_fovy;
 	const float pxpz = p_view.x / p_view.z;
 	const float pypz = p_view.y / p_view.z;
 	p_view.x = min(limx, max(-limx, pxpz)) * p_view.z;

@@ -28,14 +28,17 @@
 #define DEPTH_OFFSET 0
 #define ALPHA_OFFSET 1
 #define NORMAL_OFFSET 2 
-#define DISTORTION_OFFSET 5
-#define MAXW_OFFSET 6
+#define DISTORTION_OFFSET 6
+#define MAXDEPTH_OFFSET 5
 #define DEBUG 0
 #define DUAL_VISIABLE 1
-#define NEAR_PLANE 0.2f
+#define NEAR_PLANE 0.2
+#define FAR_PLANE 100.0
 #define VIEW_FRUSTUM_CULLING 1
 #define HARD_CULLING 1
-#define CLIP_THRESH 1.1f
+#define CLIP_THRESH 1.3f
+#define SKIL_NEGATIVE 1
+#define MAPPED_Z 1
 // #define SMOOTH_THRESHOLD 0.0001
 
 // Spherical harmonics coefficients
