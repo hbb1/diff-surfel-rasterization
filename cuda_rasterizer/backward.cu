@@ -207,6 +207,9 @@ renderCUDA(
 	float dL_ddepth;
 	float dL_daccum;
 	float dL_dnormal2D[3];
+	const int max_contributor = inside ? n_contrib[pix_id + H * W] : 0;
+	float dL_dmax_depth;
+	// float dL_dmax_normal[3];
 	// float dL_dcos_norm;
 	// float dL_dcos_depth;
 	if (inside) {
@@ -215,7 +218,9 @@ renderCUDA(
 		dL_dreg = dL_depths[DISTORTION_OFFSET * H * W + pix_id];
 		for (int i = 0; i < 3; i++) 
 			dL_dnormal2D[i] = dL_depths[(NORMAL_OFFSET + i) * H * W + pix_id];
-		// dL_dcos_depth = dL_depths[DISTORTION_OFFSET * H * W + pix_id];
+		// for (int i = 0; i < 3; i++) 
+			// dL_dmax_normal[i] = dL_depths[(MAX_NORMAL_OFFSET + i) * H * W + pix_id];
+		dL_dmax_depth = dL_depths[MAXDEPTH_OFFSET * H * W + pix_id];
 		// dL_dcos_norm = dL_depths[DISTNORM_OFFSET * H * W + pix_id];
 	}
 
@@ -308,7 +313,7 @@ renderCUDA(
 			// float c_d = (s.x * Tw.x + s.y * Tw.y) + Tw.z;
 			float c_d = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z;
 #if SKIL_NEGATIVE
-			if (depth < NEAR_PLANE) continue;
+			if (c_d < NEAR_PLANE) continue;
 #endif
 #else
 			float c_d = Tw.z;
@@ -356,7 +361,7 @@ renderCUDA(
 			// float dL_dweight = 0.0f; // detach weight
 #if MAPPED_Z
 			float m_d = (FAR_PLANE * c_d - FAR_PLANE * NEAR_PLANE) / ((FAR_PLANE - NEAR_PLANE) * c_d);
-			float dmd_dd = (FAR_PLANE * NEAR_PLANE) / ((FAR_PLANE - NEAR_PLANE) * c_d);
+			float dmd_dd = (FAR_PLANE * NEAR_PLANE) / ((FAR_PLANE - NEAR_PLANE) * c_d * c_d);
 #else
 			float md = c_d;
 			float dmd_dd = 1;
@@ -438,7 +443,9 @@ renderCUDA(
 
 			// Helpful reusable temporary variables
 			const float dL_dG = con_o.w * dL_dalpha;
+#if RENDER_AXUTILITY
 			dL_dz += alpha * T * dL_ddepth; 
+#endif
 
 #if DEBUG
 			if (collected_id[j] > 0 && pix.x == W / 4 && pix.y == H / 2) {
@@ -446,6 +453,7 @@ renderCUDA(
 				// printf("%d backward %d D %.8f\n", contributor, collected_id[j], D);
 				printf("%d backward %d T %.8f\n", contributor, collected_id[j], T);
 				printf("%d backward %d dL_dalpha %.8f\n", contributor, collected_id[j], dL_dalpha);
+				printf("%d backward %d dL_dmd %.8f\n", contributor, collected_id[j], dL_dmd);
 				printf("%d backward %d dL_dz %.8f\n", contributor, collected_id[j], dL_dz);
 				printf("%d backward %d max_contrib %d\n", contributor, collected_id[j], max_contributor);
 				printf("-----------\n");
@@ -586,14 +594,22 @@ inline __device__ void computeCov3D(
 	glm::vec3 p_view = W * p_world + cam_pos;
 
 #if VIEW_FRUSTUM_CULLING and not HARD_CULLING
-	const float limx = CLIP_THRESH * tan_fovx;
-	const float limy = CLIP_THRESH * tan_fovy;
-	const float pxpz = p_view.x / p_view.z;
-	const float pypz = p_view.y / p_view.z;
-	p_view.x = min(limx, max(-limx, pxpz)) * p_view.z;
-	p_view.y = min(limy, max(-limy, pypz)) * p_view.z;
+#if PLUS_R
+	const float r = max(glm::length(R[0]), glm::length(R[1])) / p_view.z;
+#else
+	const float r = 0.0f;
 #endif
-
+	const float limx = CLIP_THRESH * tan_fovx + r;
+	const float limy = CLIP_THRESH * tan_fovy + r;
+	const float pxpz = (p_view.x) / p_view.z;
+	const float pypz = (p_view.y) / p_view.z;
+	const float xclip = min(limx, max(-limx, pxpz));
+	const float yclip = min(limy, max(-limy, pypz));
+	p_view.x = xclip * p_view.z;
+	p_view.y = yclip * p_view.z;
+	const float x_grad_mul = pxpz < -limx || pxpz > limx ? 0 : 1;
+	const float y_grad_mul = pypz < -limy || pypz > limy ? 0 : 1;
+#endif
 	glm::mat3 M = glm::mat3(W * RS[0], W * RS[1], p_view);
 
 
@@ -610,6 +626,12 @@ inline __device__ void computeCov3D(
 		glm::vec3(dL_dM_aug[1]),
 		glm::vec3(dL_dM_aug[2])
 	);
+
+#if VIEW_FRUSTUM_CULLING and not HARD_CULLING
+	dL_dM[2].z += (1-x_grad_mul) * xclip * dL_dM[2].x + (1-y_grad_mul) * yclip * dL_dM[2].y;
+	dL_dM[2].x *= x_grad_mul;
+	dL_dM[2].y *= y_grad_mul;
+#endif
 
 	glm::vec3 dL_dRS0 = glm::transpose(W) * dL_dM[0];
 	glm::vec3 dL_dRS1 = glm::transpose(W) * dL_dM[1];
@@ -636,12 +658,6 @@ inline __device__ void computeCov3D(
 		0.0f
 	);
 
-#if CLIP
-	const float x_grad_mul = pxpz < -limx || pxpz > limx ? 0 : 1;
-	const float y_grad_mul = pypz < -limy || pypz > limy ? 0 : 1;
-	dL_dpw.x *= x_grad_mul;
-	dL_dpw.y *= y_grad_mul;
-#endif
 	dL_dmean3D = dL_dpw;
 	// unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
 	// if (idx == 0) {

@@ -92,21 +92,21 @@ __device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, co
 	glm::mat3 R = quat_to_rotmat(quat) * scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
 
 #if VIEW_FRUSTUM_CULLING
-	// culing spalt that outside the view frustum
-#if HARD_CULLING
-	const float pxpz = (p_view.x) / p_view.z;
-	const float pypz = (p_view.y) / p_view.z;
+#if PLUS_R
 	const float r = max(glm::length(R[0]), glm::length(R[1])) / p_view.z;
+#else
+	const float r = 0.0f;
+#endif
 	const float limx = CLIP_THRESH * tan_fovx + r;
 	const float limy = CLIP_THRESH * tan_fovy + r;
+	// culing spalt that outside the view frustum
+	const float pxpz = (p_view.x) / p_view.z;
+	const float pypz = (p_view.y) / p_view.z;
+#if HARD_CULLING
 	if (pxpz < -limx || pxpz > limx || pypz < -limy || pypz > limy) {
 		return false;
 	}
 #else
-	const float limx = CLIP_THRESH * tan_fovx;
-	const float limy = CLIP_THRESH * tan_fovy;
-	const float pxpz = (p_view.x) / p_view.z;
-	const float pypz = (p_view.y) / p_view.z;
 	p_view.x = min(limx, max(-limx, pxpz)) * p_view.z;
 	p_view.y = min(limy, max(-limy, pypz)) * p_view.z;
 #endif
@@ -505,8 +505,8 @@ renderCUDA(
 
 #if RENDER_AXUTILITY
 		n_contrib[pix_id + H * W] = max_contributor;
-		final_T[pix_id + H * W] = D;
-		final_T[pix_id + 2 * H * W] = D2;
+		final_T[pix_id + H * W] = dist1;
+		final_T[pix_id + 2 * H * W] = dist2;
 		out_depth[pix_id + DEPTH_OFFSET * H * W] = D;
 		out_depth[pix_id + ALPHA_OFFSET * H * W] = 1 - T;
 		for (int ch=0; ch<3; ch++) out_depth[pix_id + (NORMAL_OFFSET+ch) * H * W] = N[ch];
