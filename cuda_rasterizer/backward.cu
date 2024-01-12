@@ -209,19 +209,17 @@ renderCUDA(
 	float dL_dnormal2D[3];
 	const int max_contributor = inside ? n_contrib[pix_id + H * W] : 0;
 	float dL_dmax_depth;
-	// float dL_dmax_normal[3];
-	// float dL_dcos_norm;
-	// float dL_dcos_depth;
+	float dL_dmax_dweight;
+
 	if (inside) {
 		dL_ddepth = dL_depths[DEPTH_OFFSET * H * W + pix_id];
 		dL_daccum = dL_depths[ALPHA_OFFSET * H * W + pix_id];
 		dL_dreg = dL_depths[DISTORTION_OFFSET * H * W + pix_id];
 		for (int i = 0; i < 3; i++) 
 			dL_dnormal2D[i] = dL_depths[(NORMAL_OFFSET + i) * H * W + pix_id];
-		// for (int i = 0; i < 3; i++) 
-			// dL_dmax_normal[i] = dL_depths[(MAX_NORMAL_OFFSET + i) * H * W + pix_id];
+
 		dL_dmax_depth = dL_depths[MAXDEPTH_OFFSET * H * W + pix_id];
-		// dL_dcos_norm = dL_depths[DISTNORM_OFFSET * H * W + pix_id];
+		dL_dmax_dweight = dL_depths[MAX_WEIGHT_OFFSET * H * W + pix_id];
 	}
 
 	// for compute gradient with respect to depth and normal
@@ -292,13 +290,13 @@ renderCUDA(
 			float3 k = {-Tu.x + pixf.x * Tw.x, -Tu.y + pixf.x * Tw.y, -Tu.z + pixf.x * Tw.z};
 			float3 l = {-Tv.x + pixf.y * Tw.x, -Tv.y + pixf.y * Tw.y, -Tv.z + pixf.y * Tw.z};
 
-			// if ((k.x * l.y - k.y * l.x) == 0.0f) continue;
-			// float inv_norm = 1.0f / (k.x * l.y - k.y * l.x);
-			float norm = (k.x * l.y - k.y * l.x);
-			if (norm == 0.0f) continue;
+			float3 p = crossProduct(k, l);
 
-			float inv_norm = 1.0f / norm;
-			float2 s = {(l.z * k.y - k.z * l.y) * inv_norm, -(l.z * k.x - k.z * l.x) * inv_norm};
+#if SKIL_NEGATIVE
+			if (p.z == 0.0) continue; // there is not intersection
+#endif
+
+			float2 s = {p.x / p.z, p.y / p.z};
 			float rho3d = (s.x * s.x + s.y * s.y); // splat distance
 			
 			// add low pass filter according to Botsch et al. [2005].
@@ -354,11 +352,8 @@ renderCUDA(
 			}
 
 			float dL_dz = 0.0f;
+			float dL_dweight = 0;
 #if RENDER_AXUTILITY
-
-			// D = D - T * alpha * c_d;
-			// D2 = D2 - T * alpha * c_d * c_d;
-			// float dL_dweight = 0.0f; // detach weight
 #if MAPPED_Z
 			float m_d = (FAR_PLANE * c_d - FAR_PLANE * NEAR_PLANE) / ((FAR_PLANE - NEAR_PLANE) * c_d);
 			float dmd_dd = (FAR_PLANE * NEAR_PLANE) / ((FAR_PLANE - NEAR_PLANE) * c_d * c_d);
@@ -366,51 +361,17 @@ renderCUDA(
 			float md = c_d;
 			float dmd_dd = 1;
 #endif
-			float dL_dweight = (final_D2 + m_d * m_d * final_A - 2 * m_d * final_D) * dL_dreg;
+			if (contributor == max_contributor-1) {
+				dL_dz += dL_dmax_depth;
+				dL_dweight += dL_dmax_dweight;
+			}
+
+			dL_dweight += (final_D2 + m_d * m_d * final_A - 2 * m_d * final_D) * dL_dreg;
 			dL_dalpha += dL_dweight - last_dL_dT;
 			// propagate the current weight W_{i} to next weight W_{i-1}
 			last_dL_dT = dL_dweight * alpha + (1 - alpha) * last_dL_dT;
 			float dL_dmd = 2.0f * (T * alpha) * (m_d * final_A - final_D) * dL_dreg;
 			dL_dz += dL_dmd * dmd_dd;
-
-			if (contributor == max_contributor-1) {
-				dL_dz += dL_dmax_depth;
-				// for (int ch = 0; ch < 3; ch++) {
-					// atomicAdd((&dL_dnormal3D[global_id * 3 + ch]), alpha * T * dL_dmax_normal[ch]);
-				// }
-			}
-			// float w = T * alpha;
-			// float A = (1-T);
-			// float A_last = (1-T_last);
-			// float A_final = (1-T_final);
-
-			// float A_error = (A + A_last - A_final) * dL_dreg;
-			// float D_error = (D + D_last - D_final) * dL_dreg;
-			// float dL_dweight = A_error * c_d - D_error;
-			// dL_dalpha += dL_dweight - last_dL_dT;
-			// last_dL_dT = dL_dweight * alpha + (1 - alpha) * last_dL_dT;
-
-			// compute ray-splat cosines
-			// glm::vec3 dir = glm::vec3((pixf.x - 0.5*float(W)) / focal_x, (pixf.y-0.5*float(H)) / focal_y, 1);
-			// dir = dir / glm::length(dir);
-			// float cos = glm::dot(glm::vec3(normal[0], normal[1], normal[2]), -dir);
-			// float clamp = 1.0f;
-
-			// // Propagate gradients w.r.t ray-splat distortions
-			// accum_cos_depth_rec = last_alpha * last_cos * last_depth + (1.f - last_alpha) * accum_cos_depth_rec;
-			// accum_cos_norm_rec = last_alpha * last_cos + (1.f - last_alpha) * accum_cos_norm_rec;
-			// last_cos = cos;
-			// dL_dalpha += (cos * c_d - accum_cos_depth_rec) * dL_dcos_depth;
-			// dL_dalpha += (cos - accum_cos_norm_rec) * dL_dcos_norm;
-
-			// float dL_dcos = c_d * alpha * T * dL_dcos_depth;
-			// dL_dcos += alpha * T * dL_dcos_norm;
-			// dL_dcos *= clamp;
-
-			// dL_dz += cos * alpha * T * dL_dcos_depth;
-			// atomicAdd((&dL_dnormal3D[global_id * 3 + 0]), -dir.x * dL_dcos);
-			// atomicAdd((&dL_dnormal3D[global_id * 3 + 1]), -dir.y * dL_dcos);
-			// atomicAdd((&dL_dnormal3D[global_id * 3 + 2]), -dir.z * dL_dcos);
 
 			// Propagate gradients w.r.t ray-splat depths
 			accum_depth_rec = last_alpha * last_depth + (1.f - last_alpha) * accum_depth_rec;
@@ -475,28 +436,11 @@ renderCUDA(
 				};
 				float3 dz_dTw = {0.0, 0.0, 1.0};
 #endif
-				float dsx_dnorm = s.x * (-inv_norm);
-				float dsy_dnorm = s.y * (-inv_norm);
-				float3 dnorm_dk = {l.y, -l.x, 0.0};
-				float3 dnorm_dl = {-k.y, k.x, 0.0};
-
-				// can be optimized but factor out inv_norm
-				float3 dsx_dk = {0.0 * inv_norm + dsx_dnorm * dnorm_dk.x, l.z * inv_norm + dsx_dnorm * dnorm_dk.y, -l.y * inv_norm + dsx_dnorm * dnorm_dk.z};
-				float3 dsy_dk = {-l.z * inv_norm + dsy_dnorm * dnorm_dk.x, 0.0 * inv_norm + dsy_dnorm * dnorm_dk.y, l.x * inv_norm + dsy_dnorm * dnorm_dk.z};
-				float3 dsx_dl = {0.0 * inv_norm + dsx_dnorm * dnorm_dl.x, -k.z * inv_norm + dsx_dnorm * dnorm_dl.y, k.y * inv_norm + dsx_dnorm * dnorm_dl.z};
-				float3 dsy_dl = {k.z * inv_norm + dsy_dnorm * dnorm_dl.x, 0.0 * inv_norm + dsy_dnorm * dnorm_dl.y, -k.x * inv_norm + dsy_dnorm * dnorm_dl.z};
-
-				float3 dL_dk = {
-					dL_ds.x * dsx_dk.x + dL_ds.y * dsy_dk.x, 
-					dL_ds.x * dsx_dk.y + dL_ds.y * dsy_dk.y, 
-					dL_ds.x * dsx_dk.z + dL_ds.y * dsy_dk.z, 
-				};
-
-				float3 dL_dl = {
-					dL_ds.x * dsx_dl.x + dL_ds.y * dsy_dl.x, 
-					dL_ds.x * dsx_dl.y + dL_ds.y * dsy_dl.y, 
-					dL_ds.x * dsx_dl.z + dL_ds.y * dsy_dl.z, 
-				};
+				float dsx_pz = dL_ds.x / p.z;
+				float dsy_pz = dL_ds.y / p.z;
+				float3 dL_dp = {dsx_pz, dsy_pz, -(dsx_pz * s.x + dsy_pz * s.y)};
+				float3 dL_dk = crossProduct(l, dL_dp);
+				float3 dL_dl = crossProduct(dL_dp, k);
 
 				float3 dL_dTu = {-dL_dk.x, -dL_dk.y, -dL_dk.z};
 				float3 dL_dTv = {-dL_dl.x, -dL_dl.y, -dL_dl.z};
@@ -632,11 +576,12 @@ inline __device__ void computeCov3D(
 	dL_dM[2].x *= x_grad_mul;
 	dL_dM[2].y *= y_grad_mul;
 #endif
-
-	glm::vec3 dL_dRS0 = glm::transpose(W) * dL_dM[0];
-	glm::vec3 dL_dRS1 = glm::transpose(W) * dL_dM[1];
-	glm::vec3 dL_dpw = glm::transpose(W) * dL_dM[2];
-	glm::vec3 dL_dtn = glm::transpose(W) * glm::vec3(dL_dnormal3D[0], dL_dnormal3D[1], dL_dnormal3D[2]);
+	glm::mat3 W_t = glm::transpose(W);
+	glm::mat3 dL_dRS = W_t * dL_dM;
+	glm::vec3 dL_dRS0 = dL_dRS[0];
+	glm::vec3 dL_dRS1 = dL_dRS[1];
+	glm::vec3 dL_dpw = dL_dRS[2];
+	glm::vec3 dL_dtn = W_t * glm::vec3(dL_dnormal3D[0], dL_dnormal3D[1], dL_dnormal3D[2]);
 
 #if DUAL_VISIABLE
 	glm::vec3 tn = W*R[2];
@@ -747,8 +692,9 @@ __global__ void preprocessCUDA(
 
 __global__ void computeCenter(int P, 
 	const int * radii,
+	const float W, const float H,
 	const float * cov3Ds,
-	const float3 * dL_dmean2Ds,
+	float3 * dL_dmean2Ds,
 	float *dL_dcov3Ds) {
 	
 	auto idx = cg::this_grid().thread_rank();
@@ -790,6 +736,9 @@ __global__ void computeCenter(int P,
 	dL_dcov3Ds[9 * idx + 7] += dL_dT3.y;
 	dL_dcov3Ds[9 * idx + 8] += dL_dT3.z;
 
+	float z = cov3D[8];
+	dL_dmean2Ds[idx].x = dL_dcov3Ds[9 * idx + 2] * z * W; // to ndc 
+	dL_dmean2Ds[idx].y = dL_dcov3Ds[9 * idx + 5] * z * H; // to ndc
 	// if (idx == 0) {
 	// 	printf("dL_dmean2d %d [%.8f, %.8f]\n", idx, dL_dmean2D.x, dL_dmean2D.y);
 	// 	printf("T %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, T[0].x, T[0].y, T[0].z, T[1].x, T[1].y, T[1].z, T[2].x, T[2].y, T[2].z, T[3].x, T[3].y, T[3].z);
@@ -815,7 +764,7 @@ void BACKWARD::preprocess(
 	const float focal_x, const float focal_y,
 	const float tan_fovx, const float tan_fovy,
 	const glm::vec3* campos, 
-	const float3* dL_dmean2Ds,
+	float3* dL_dmean2Ds,
 	const float* dL_dnormal3Ds,
 	float* dL_dcov3Ds,
 	float* dL_dcolors,
@@ -831,9 +780,12 @@ void BACKWARD::preprocess(
 	// propagate gradients to cov3D
 
 	// we do not use the center actually
+	float W = focal_x * tan_fovx;
+	float H = focal_y * tan_fovy;
 	computeCenter << <(P + 255) / 256, 256 >> >(
-		P, 
+		P,
 		radii,
+		W, H,
 		cov3Ds,
 		dL_dmean2Ds,
 		dL_dcov3Ds);

@@ -58,7 +58,8 @@
         "string_view": "cpp",
         "valarray": "cpp",
         "__locale": "cpp",
-        "semaphore": "cpp"
+        "semaphore": "cpp",
+        "__node_handle": "cpp"
     },
     "cmake.configureOnOpen": false,
     "C_Cpp.errorSquiggles": "disabled"

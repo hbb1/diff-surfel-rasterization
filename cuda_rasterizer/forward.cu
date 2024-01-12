@@ -120,7 +120,7 @@ __device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, co
 	float cos = glm::dot(-tn, p_view);
 	if (cos == 0.0f) return false;
 
-#if DUAL_VISIABLE
+#if RENDER_AXUTILITY and DUAL_VISIABLE
 	float multiplier = cos > 0 ? 1 : -1;
 	tn *= multiplier;
 #endif
@@ -212,10 +212,6 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	// this Gaussian will not be processed further.
 	radii[idx] = 0;
 	tiles_touched[idx] = 0;
-	
-#if BACK_FACE_CULLING
-	if (opacities[idx]  < 0.0001) return;
-#endif
 
 	glm::vec3 p_world = glm::vec3(orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2]);
 	// Perform near culling, quit if outside.
@@ -347,8 +343,8 @@ renderCUDA(
 	float distortion = {0};
 	float max_depth = {0};
 	float max_weight = {0};
-	float max_contributor = {0};
-	// float2 SDF = {0.0, 0.0};
+	float max_contributor = {-1};
+
 #endif
 
 	// Iterate over batches until all done or range is complete
@@ -388,11 +384,13 @@ renderCUDA(
 			float3 k = {-Tu.x + pixf.x * Tw.x, -Tu.y + pixf.x * Tw.y, -Tu.z + pixf.x * Tw.z};
 			float3 l = {-Tv.x + pixf.y * Tw.x, -Tv.y + pixf.y * Tw.y, -Tv.z + pixf.y * Tw.z};
 
-			float norm = (k.x * l.y - k.y * l.x);
-			if (norm == 0.0f) continue;
+			float3 p = crossProduct(k, l);
 
-			float inv_norm = 1.0f / norm;
-			float2 s = {(l.z * k.y - k.z * l.y) * inv_norm, -(l.z * k.x - k.z * l.x) * inv_norm};
+#if SKIL_NEGATIVE
+			if (p.z == 0.0) continue; // there is not intersection
+#endif
+
+			float2 s = {p.x / p.z, p.y / p.z};
 			float rho3d = (s.x * s.x + s.y * s.y); // splat distance
 			
 			// add low pass filter according to Botsch et al. [2005]. 
@@ -402,7 +400,7 @@ renderCUDA(
 			float rho = min(rho3d, rho2d);
 			
 			// compute accurate depth when necessary
-#if INTERSECT_DEPTH
+#if RENDER_AXUTILITY and INTERSECT_DEPTH
 			// float depth = (s.x * Tw.x + s.y * Tw.y) + Tw.z;
 			float depth = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z; // splat depth
 #if SKIL_NEGATIVE
@@ -444,18 +442,13 @@ renderCUDA(
 			float error = mapped_depth * mapped_depth * A + dist2 - 2 * mapped_depth * dist1;
 			distortion += error * alpha * T;
 
-			if (alpha * T >= max_weight) {
+			// if (alpha * T >= max_weight) {
+			if (T > 0.5) {
 				max_depth = depth;
 				max_weight = alpha * T;
 				max_contributor = contributor;
 			}
-			// render sdf map
-			// glm::vec3 dir = glm::vec3((pixf.x - 0.5*float(W)) / focal_x, (pixf.y-0.5*float(H)) / focal_y, 1);
-			// dir = dir / glm::length(dir);
-			// float cos = glm::dot(glm::vec3(normal[0], normal[1], normal[2]), -dir);
-			// // cos = max(cos, 0.0f);
-			// SDF.x += depth * cos * alpha * T;
-			// SDF.y += cos * alpha * T;
+
 #if DEBUG
 			if (collected_id[j] > 0 && pix.x == W / 4 && pix.y == H / 2) {
 				printf("%d forward %d %d\n", contributor, pix.x, pix.y);
@@ -512,6 +505,7 @@ renderCUDA(
 		for (int ch=0; ch<3; ch++) out_depth[pix_id + (NORMAL_OFFSET+ch) * H * W] = N[ch];
 		out_depth[pix_id + MAXDEPTH_OFFSET * H * W] = max_depth;
 		out_depth[pix_id + DISTORTION_OFFSET * H * W] = distortion;
+		out_depth[pix_id + MAX_WEIGHT_OFFSET * H * W] = max_weight;
 #endif
 	}
 }

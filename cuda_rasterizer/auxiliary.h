@@ -22,24 +22,25 @@
 #define FilterSize 0.7071067811865476
 #define FilterInvSquare 1/(FilterSize*FilterSize)
 #define INTERSECT_DEPTH 1 // if use accurate depth or center depth
-#define BACK_FACE_CULLING 1
-#define TIGHTBBOX 1
-#define RENDER_AXUTILITY 0
+#define TIGHTBBOX 0
+#define RENDER_AXUTILITY 1
 #define DEPTH_OFFSET 0
 #define ALPHA_OFFSET 1
 #define NORMAL_OFFSET 2 
-#define DISTORTION_OFFSET 6
 #define MAXDEPTH_OFFSET 5
+#define DISTORTION_OFFSET 6
+#define MAX_WEIGHT_OFFSET 7
+
 #define DEBUG 0
 #define DUAL_VISIABLE 1
 #define NEAR_PLANE 0.2
 #define FAR_PLANE 100.0
-#define VIEW_FRUSTUM_CULLING 1
+#define VIEW_FRUSTUM_CULLING 0
 #define HARD_CULLING 1
-#define CLIP_THRESH 1.0f
+#define CLIP_THRESH 1.1f
 #define SKIL_NEGATIVE 1
 #define MAPPED_Z 1
-#define PLUS_R 0
+#define PLUS_R 1
 // #define SMOOTH_THRESHOLD 0.0001
 
 // Spherical harmonics coefficients
@@ -153,6 +154,14 @@ __forceinline__ __device__ float4 dnormvdv(float4 v, float4 dv)
 	dnormvdv.z = ((sum2 - v.z * v.z) * dv.z - v.z * (vdv_sum - vdv.z)) * invsum32;
 	dnormvdv.w = ((sum2 - v.w * v.w) * dv.w - v.w * (vdv_sum - vdv.w)) * invsum32;
 	return dnormvdv;
+}
+
+__forceinline__ __device__ float3 crossProduct(float3 a, float3 b) {
+	float3 result;
+	result.x = a.y * b.z - a.z * b.y;
+    result.y = a.z * b.x - a.x * b.z;
+    result.z = a.x * b.y - a.y * b.x;
+    return result;
 }
 
 __forceinline__ __device__ float sigmoid(float x)
