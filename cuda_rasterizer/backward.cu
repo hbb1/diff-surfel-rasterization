@@ -365,8 +365,11 @@ renderCUDA(
 				dL_dz += dL_dmax_depth;
 				dL_dweight += dL_dmax_dweight;
 			}
-
+#if detach_weight
+			dL_dweight += 0;
+#else
 			dL_dweight += (final_D2 + m_d * m_d * final_A - 2 * m_d * final_D) * dL_dreg;
+#endif
 			dL_dalpha += dL_dweight - last_dL_dT;
 			// propagate the current weight W_{i} to next weight W_{i-1}
 			last_dL_dT = dL_dweight * alpha + (1 - alpha) * last_dL_dT;

@@ -41,6 +41,7 @@
 #define SKIL_NEGATIVE 1
 #define MAPPED_Z 1
 #define PLUS_R 1
+#define detach_weight 0
 // #define SMOOTH_THRESHOLD 0.0001
 
 // Spherical harmonics coefficients
