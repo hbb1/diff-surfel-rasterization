@@ -23,7 +23,7 @@ namespace FORWARD
 	// Perform initial steps for each Gaussian prior to rasterization.
 	void preprocess(int P, int D, int M,
 		const float* orig_points,
-		const glm::vec3* scales,
+		const glm::vec2* scales,
 		const float scale_modifier,
 		const glm::vec4* rotations,
 		const float* opacities,

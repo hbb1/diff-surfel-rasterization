@@ -71,7 +71,7 @@ __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const 
 }
 
 
-__device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, const glm::vec3 &scale, const float *viewmat, const float4 &intrins, float tan_fovx, float tan_fovy, float* cov3D, float3 &normal) {
+__device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, const glm::vec2 &scale, const float *viewmat, const float4 &intrins, float tan_fovx, float tan_fovy, float* cov3D, float3 &normal) {
 	// camera information 
 	const glm::mat3 W = glm::mat3(
 		viewmat[0],viewmat[1],viewmat[2],
@@ -180,7 +180,7 @@ __device__ bool computeCenter(const float *cov3D, float2 & center, float2 & exte
 template<int C>
 __global__ void preprocessCUDA(int P, int D, int M,
 	const float* orig_points,
-	const glm::vec3* scales,
+	const glm::vec2* scales,
 	const float scale_modifier,
 	const glm::vec4* rotations,
 	const float* opacities,
@@ -220,7 +220,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 		return;
 	
 	float4 intrins = {focal_x, focal_y, float(W)/2.0, float(H)/2.0};
-	glm::vec3 scale = scales[idx];
+	glm::vec2 scale = scales[idx];
 	glm::vec4 quat = rotations[idx];
 	// view frustum cullling TODO
 	const float* cov3D;
@@ -546,7 +546,7 @@ void FORWARD::render(
 
 void FORWARD::preprocess(int P, int D, int M,
 	const float* means3D,
-	const glm::vec3* scales,
+	const glm::vec2* scales,
 	const float scale_modifier,
 	const glm::vec4* rotations,
 	const float* opacities,

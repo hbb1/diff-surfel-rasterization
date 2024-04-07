@@ -508,7 +508,7 @@ renderCUDA(
 inline __device__ void computeCov3D(
 	const glm::vec3 & p_world,
 	const glm::vec4 & quat,
-	const glm::vec3 & scale,
+	const glm::vec2 & scale,
 	const float* viewmat,
 	const float4 & intrins,
 	float tan_fovx, 
@@ -517,7 +517,7 @@ inline __device__ void computeCov3D(
 	const float* dL_dcov3D,
 	const float* dL_dnormal3D,
 	glm::vec3 & dL_dmean3D,
-	glm::vec3 & dL_dscale,
+	glm::vec2 & dL_dscale,
 	glm::vec4 & dL_drot
 ) {
 	// camera information 
@@ -600,10 +600,9 @@ inline __device__ void computeCov3D(
 	);
 
 	dL_drot = quat_to_rotmat_vjp(quat, dL_dR);
-	dL_dscale = glm::vec3(
+	dL_dscale = glm::vec2(
 		(float)glm::dot(dL_dRS0, R[0]),
-		(float)glm::dot(dL_dRS1, R[1]),
-		0.0f
+		(float)glm::dot(dL_dRS1, R[1])
 	);
 
 	dL_dmean3D = dL_dpw;
@@ -635,7 +634,7 @@ __global__ void preprocessCUDA(
 	const int* radii,
 	const float* shs,
 	const bool* clamped,
-	const glm::vec3* scales,
+	const glm::vec2* scales,
 	const glm::vec4* rotations,
 	const float scale_modifier,
 	const float* viewmatrix,
@@ -652,7 +651,7 @@ __global__ void preprocessCUDA(
 	float* dL_dshs,
 	// grad output
 	glm::vec3* dL_dmean3Ds,
-	glm::vec3* dL_dscales,
+	glm::vec2* dL_dscales,
 	glm::vec4* dL_drots)
 {
 	auto idx = cg::this_grid().thread_rank();
@@ -667,7 +666,7 @@ __global__ void preprocessCUDA(
 	float4 intrins = {focal_x, focal_y, focal_x * tan_fovx, focal_y * tan_fovy};
 
 	glm::vec3 dL_dmean3D;
-	glm::vec3 dL_dscale;
+	glm::vec2 dL_dscale;
 	glm::vec4 dL_drot;
 	computeCov3D(
 		p_world,
@@ -758,7 +757,7 @@ void BACKWARD::preprocess(
 	const int* radii,
 	const float* shs,
 	const bool* clamped,
-	const glm::vec3* scales,
+	const glm::vec2* scales,
 	const glm::vec4* rotations,
 	const float scale_modifier,
 	const float* cov3Ds,
@@ -773,7 +772,7 @@ void BACKWARD::preprocess(
 	float* dL_dcolors,
 	float* dL_dshs,
 	glm::vec3* dL_dmean3Ds,
-	glm::vec3* dL_dscales,
+	glm::vec2* dL_dscales,
 	glm::vec4* dL_drots)
 {
 	// Propagate gradients for the path of 2D conic matrix computation. 
@@ -801,7 +800,7 @@ void BACKWARD::preprocess(
 		radii,
 		shs,
 		clamped,
-		(glm::vec3*)scales,
+		(glm::vec2*)scales,
 		(glm::vec4*)rotations,
 		scale_modifier,
 		viewmatrix,

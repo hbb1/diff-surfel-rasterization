@@ -61,6 +61,14 @@ RasterizeGaussiansCUDA(
   if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
 	AT_ERROR("means3D must have dimensions (num_points, 3)");
   }
+
+  if (scales.ndimension() != 2 || scales.size(1) != 2) {
+	AT_ERROR("scales must have dimensions (num_points, 2)");
+  }
+
+  if (rotations.ndimension() != 2 || rotations.size(1) != 4) {
+	AT_ERROR("rotations must have dimensions (num_points, 4)");
+  }
   
   const int P = means3D.size(0);
   const int H = image_height;
@@ -190,7 +198,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
   torch::Tensor dL_dopacity = torch::zeros({P, 1}, means3D.options());
   torch::Tensor dL_dcov3D = torch::zeros({P, 9}, means3D.options());
   torch::Tensor dL_dsh = torch::zeros({P, M, 3}, means3D.options());
-  torch::Tensor dL_dscales = torch::zeros({P, 3}, means3D.options());
+  torch::Tensor dL_dscales = torch::zeros({P, 2}, means3D.options());
   torch::Tensor dL_drotations = torch::zeros({P, 4}, means3D.options());
   
   if(P != 0)

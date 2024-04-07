@@ -249,7 +249,7 @@ int CudaRasterizer::Rasterizer::forward(
 	CHECK_CUDA(FORWARD::preprocess(
 		P, D, M,
 		means3D,
-		(glm::vec3*)scales,
+		(glm::vec2*)scales,
 		scale_modifier,
 		(glm::vec4*)rotations,
 		opacities,
@@ -428,7 +428,7 @@ void CudaRasterizer::Rasterizer::backward(
 		radii,
 		shs,
 		geomState.clamped,
-		(glm::vec3*)scales,
+		(glm::vec2*)scales,
 		(glm::vec4*)rotations,
 		scale_modifier,
 		cov3D_ptr,
@@ -443,6 +443,6 @@ void CudaRasterizer::Rasterizer::backward(
 		dL_dcolor,
 		dL_dsh,
 		(glm::vec3*)dL_dmean3D,
-		(glm::vec3*)dL_dscale,
+		(glm::vec2*)dL_dscale,
 		(glm::vec4*)dL_drot), debug)
 }

@@ -1,4 +1,8 @@
 build/
 diff_gaussian_rasterization.egg-info/
+diff_surf_rasterization.egg-info/
 dist/
 *.so
+.vscode
+**__pycache__**
+*.pyc
