@@ -159,8 +159,8 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& ch
 	obtain(chunk, geom.clamped, P * 3, 128);
 	obtain(chunk, geom.internal_radii, P, 128);
 	obtain(chunk, geom.means2D, P, 128);
-	obtain(chunk, geom.cov3D, P * 9, 128);
-	obtain(chunk, geom.conic_opacity, P, 128);
+	obtain(chunk, geom.transMat, P * 9, 128);
+	obtain(chunk, geom.normal_opacity, P, 128);
 	obtain(chunk, geom.rgb, P * 3, 128);
 	obtain(chunk, geom.tiles_touched, P, 128);
 	cub::DeviceScan::InclusiveSum(nullptr, geom.scan_size, geom.tiles_touched, geom.tiles_touched, P);
@@ -209,14 +209,14 @@ int CudaRasterizer::Rasterizer::forward(
 	const float* scales,
 	const float scale_modifier,
 	const float* rotations,
-	const float* cov3D_precomp,
+	const float* transMat_precomp,
 	const float* viewmatrix,
 	const float* projmatrix,
 	const float* cam_pos,
 	const float tan_fovx, float tan_fovy,
 	const bool prefiltered,
 	float* out_color,
-	float* out_depth,
+	float* out_others,
 	int* radii,
 	bool debug)
 {
@@ -255,7 +255,7 @@ int CudaRasterizer::Rasterizer::forward(
 		opacities,
 		shs,
 		geomState.clamped,
-		cov3D_precomp,
+		transMat_precomp,
 		colors_precomp,
 		viewmatrix, projmatrix,
 		(glm::vec3*)cam_pos,
@@ -265,9 +265,9 @@ int CudaRasterizer::Rasterizer::forward(
 		radii,
 		geomState.means2D,
 		geomState.depths,
-		geomState.cov3D,
+		geomState.transMat,
 		geomState.rgb,
-		geomState.conic_opacity,
+		geomState.normal_opacity,
 		tile_grid,
 		geomState.tiles_touched,
 		prefiltered
@@ -320,7 +320,7 @@ int CudaRasterizer::Rasterizer::forward(
 
 	// Let each tile blend its range of Gaussians independently in parallel
 	const float* feature_ptr = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
-	const float* cov3D_ptr = cov3D_precomp != nullptr ? cov3D_precomp : geomState.cov3D;
+	const float* transMat_ptr = transMat_precomp != nullptr ? transMat_precomp : geomState.transMat;
 	CHECK_CUDA(FORWARD::render(
 		tile_grid, block,
 		imgState.ranges,
@@ -329,14 +329,14 @@ int CudaRasterizer::Rasterizer::forward(
 		focal_x, focal_y,
 		geomState.means2D,
 		feature_ptr,
-		cov3D_ptr,
+		transMat_ptr,
 		geomState.depths,
-		geomState.conic_opacity,
+		geomState.normal_opacity,
 		imgState.accum_alpha,
 		imgState.n_contrib,
 		background,
 		out_color,
-		out_depth), debug)
+		out_others), debug)
 
 	return num_rendered;
 }
@@ -353,7 +353,7 @@ void CudaRasterizer::Rasterizer::backward(
 	const float* scales,
 	const float scale_modifier,
 	const float* rotations,
-	const float* cov3D_precomp,
+	const float* transMat_precomp,
 	const float* viewmatrix,
 	const float* projmatrix,
 	const float* campos,
@@ -369,7 +369,7 @@ void CudaRasterizer::Rasterizer::backward(
 	float* dL_dopacity,
 	float* dL_dcolor,
 	float* dL_dmean3D,
-	float* dL_dcov3D,
+	float* dL_dtransMat,
 	float* dL_dsh,
 	float* dL_dscale,
 	float* dL_drot,
@@ -395,7 +395,7 @@ void CudaRasterizer::Rasterizer::backward(
 	// If we were given precomputed colors and not SHs, use them.
 	const float* color_ptr = (colors_precomp != nullptr) ? colors_precomp : geomState.rgb;
 	const float* depth_ptr = geomState.depths;
-	const float* cov3D_ptr = (cov3D_precomp != nullptr) ? cov3D_precomp : geomState.cov3D;
+	const float* transMat_ptr = (transMat_precomp != nullptr) ? transMat_precomp : geomState.transMat;
 	CHECK_CUDA(BACKWARD::render(
 		tile_grid,
 		block,
@@ -405,15 +405,15 @@ void CudaRasterizer::Rasterizer::backward(
 		focal_x, focal_y,
 		background,
 		geomState.means2D,
-		geomState.conic_opacity,
+		geomState.normal_opacity,
 		color_ptr,
-		cov3D_ptr,
+		transMat_ptr,
 		depth_ptr,
 		imgState.accum_alpha,
 		imgState.n_contrib,
 		dL_dpix,
 		dL_depths,
-		dL_dcov3D,
+		dL_dtransMat,
 		(float3*)dL_dmean2D,
 		dL_dnormal,
 		dL_dopacity,
@@ -422,7 +422,7 @@ void CudaRasterizer::Rasterizer::backward(
 	// Take care of the rest of preprocessing. Was the precomputed covariance
 	// given to us or a scales/rot pair? If precomputed, pass that. If not,
 	// use the one we computed ourselves.
-	// const float* cov3D_ptr = (cov3D_precomp != nullptr) ? cov3D_precomp : geomState.cov3D;
+	// const float* transMat_ptr = (transMat_precomp != nullptr) ? transMat_precomp : geomState.transMat;
 	CHECK_CUDA(BACKWARD::preprocess(P, D, M,
 		(float3*)means3D,
 		radii,
@@ -431,7 +431,7 @@ void CudaRasterizer::Rasterizer::backward(
 		(glm::vec2*)scales,
 		(glm::vec4*)rotations,
 		scale_modifier,
-		cov3D_ptr,
+		transMat_ptr,
 		viewmatrix,
 		projmatrix,
 		focal_x, focal_y,
@@ -439,7 +439,7 @@ void CudaRasterizer::Rasterizer::backward(
 		(glm::vec3*)campos,
 		(float3*)dL_dmean2D, // gradient inputs
 		dL_dnormal,		     // gradient inputs
-		dL_dcov3D,
+		dL_dtransMat,
 		dL_dcolor,
 		dL_dsh,
 		(glm::vec3*)dL_dmean3D,

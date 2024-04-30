@@ -25,9 +25,9 @@
 #define DEPTH_OFFSET 0
 #define ALPHA_OFFSET 1
 #define NORMAL_OFFSET 2 
-#define MAXDEPTH_OFFSET 5
+#define MIDDEPTH_OFFSET 5
 #define DISTORTION_OFFSET 6
-#define MAX_WEIGHT_OFFSET 7
+#define MEDIAN_WEIGHT_OFFSET 7
 
 // distortion helper macros
 #define BACKFACE_CULL 1
@@ -157,11 +157,6 @@ __forceinline__ __device__ float3 crossProduct(float3 a, float3 b) {
     return result;
 }
 
-__forceinline__ __device__ float sigmoid(float x)
-{
-	return 1.0f / (1.0f + expf(-x));
-}
-
 __forceinline__ __device__ bool in_frustum(int idx,
 	const float* orig_points,
 	const float* viewmatrix,
@@ -189,7 +184,7 @@ __forceinline__ __device__ bool in_frustum(int idx,
 	return true;
 }
 
-
+// adopt from gsplat: https://github.com/nerfstudio-project/gsplat/blob/main/gsplat/cuda/csrc/forward.cu
 inline __device__ glm::mat3 quat_to_rotmat(const glm::vec4 quat) {
 	// quat to rotation matrix
 	float s = rsqrtf(

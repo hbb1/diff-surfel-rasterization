@@ -72,17 +72,16 @@ __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const 
 
 // Compute a 2D-to-2D mapping matrix from a tangent plane into a image plane
 // given a 2D gaussian parameters.
-__device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, const glm::vec2 &scale, const float *viewmat, const float4 &intrins, float tan_fovx, float tan_fovy, float* cov3D, float3 &normal) {
-	// camera information 
+__device__ bool computeTransMat(const glm::vec3 &p_world, const glm::vec4 &quat, const glm::vec2 &scale, const float *viewmat, const float4 &intrins, float tan_fovx, float tan_fovy, float* transMat, float3 &normal) {
+	// Setup cameras
+	// Currently only support ideal pinhole camera
+	// but more advanced intrins can be implemented
 	const glm::mat3 W = glm::mat3(
 		viewmat[0],viewmat[1],viewmat[2],
 		viewmat[4],viewmat[5],viewmat[6],
 		viewmat[8],viewmat[9],viewmat[10]
-	); // viewmat 
-
-
+	); 
 	const glm::vec3 cam_pos = glm::vec3(viewmat[12], viewmat[13], viewmat[14]); // camera center
-	// currently only support ideal pinhole camera, but more advanced intrins can be implemented
 	const glm::mat4 P = glm::mat4(
 		intrins.x, 0.0, 0.0, 0.0,
 		0.0, intrins.y, 0.0, 0.0,
@@ -90,6 +89,8 @@ __device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, co
 		0.0, 0.0, 0.0, 0.0
 	);
 
+	// Make the geometry of 2D Gaussian as a Homogeneous transformation matrix 
+	// under the camera view, See Eq. (5) in 2DGS' paper.
 	glm::vec3 p_view = W * p_world + cam_pos;
 	glm::mat3 R = quat_to_rotmat(quat) * scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
 	glm::mat3 M = glm::mat3(W * R[0], W * R[1], p_view);
@@ -97,7 +98,6 @@ __device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, co
 	float cos = glm::dot(-tn, p_view);
 
 #if BACKFACE_CULL
-// Maybe not need culling in such extrem case
 	if (cos == 0.0f) return false;
 #endif
 
@@ -107,22 +107,22 @@ __device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, co
 	float multiplier = cos > 0 ? 1 : -1;
 	tn *= multiplier;
 #endif
-
+	// projection into screen space, see Eq. (7)
 	glm::mat4x3 T = glm::transpose(P * glm::mat3x4(
 		glm::vec4(M[0], 0.0),
 		glm::vec4(M[1], 0.0),
 		glm::vec4(M[2], 1.0)
 	));
 
-	cov3D[0] = T[0].x;
-	cov3D[1] = T[0].y;
-	cov3D[2] = T[0].z;
-	cov3D[3] = T[1].x;
-	cov3D[4] = T[1].y;
-	cov3D[5] = T[1].z;
-	cov3D[6] = T[2].x;
-	cov3D[7] = T[2].y;
-	cov3D[8] = T[2].z;
+	transMat[0] = T[0].x;
+	transMat[1] = T[0].y;
+	transMat[2] = T[0].z;
+	transMat[3] = T[1].x;
+	transMat[4] = T[1].y;
+	transMat[5] = T[1].z;
+	transMat[6] = T[2].x;
+	transMat[7] = T[2].y;
+	transMat[8] = T[2].z;
 	normal = {tn.x, tn.y, tn.z};
 	return true;
 }
@@ -130,12 +130,12 @@ __device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, co
 // Computing the bounding box of the 2D Gaussian and its center,
 // where the center of the bounding box is used to create a low pass filter
 // in the image plane
-__device__ bool computeCenter(const float *cov3D, float2 & center, float2 & extent) {
+__device__ bool computeAABB(const float *transMat, float2 & center, float2 & extent) {
 	glm::mat4x3 T = glm::mat4x3(
-		cov3D[0], cov3D[1], cov3D[2],
-		cov3D[3], cov3D[4], cov3D[5],
-		cov3D[6], cov3D[7], cov3D[8],
-		cov3D[6], cov3D[7], cov3D[8]
+		transMat[0], transMat[1], transMat[2],
+		transMat[3], transMat[4], transMat[5],
+		transMat[6], transMat[7], transMat[8],
+		transMat[6], transMat[7], transMat[8]
 	);
 
 	float d = glm::dot(glm::vec3(1.0, 1.0, -1.0), T[3] * T[3]);
@@ -172,7 +172,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	const float* opacities,
 	const float* shs,
 	bool* clamped,
-	const float* cov3D_precomp,
+	const float* transMat_precomp,
 	const float* colors_precomp,
 	const float* viewmatrix,
 	const float* projmatrix,
@@ -183,9 +183,9 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	int* radii,
 	float2* points_xy_image,
 	float* depths,
-	float* cov3Ds,
+	float* transMats,
 	float* rgb,
-	float4* conic_opacity,
+	float4* normal_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
 	bool prefiltered)
@@ -209,24 +209,24 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	glm::vec2 scale = scales[idx];
 	glm::vec4 quat = rotations[idx];
 	// view frustum cullling TODO
-	const float* cov3D;
+	const float* transMat;
 	bool ok;
 	float3 normal;
-	if (cov3D_precomp != nullptr)
+	if (transMat_precomp != nullptr)
 	{
-		cov3D = cov3D_precomp + idx * 9;
+		transMat = transMat_precomp + idx * 9;
 	}
 	else
 	{
-		ok = computeCov3D(p_world, quat, scale, viewmatrix, intrins, tan_fovx, tan_fovy, cov3Ds + idx * 9, normal);
+		ok = computeTransMat(p_world, quat, scale, viewmatrix, intrins, tan_fovx, tan_fovy, transMats + idx * 9, normal);
 		if (!ok) return;
-		cov3D = cov3Ds + idx * 9;
+		transMat = transMats + idx * 9;
 	}
 	
 	//  compute center and extent
 	float2 center;
 	float2 extent;
-	ok = computeCenter(cov3D, center, extent);
+	ok = computeAABB(transMat, center, extent);
 	if (!ok) return;
 
 	// add the bounding of countour
@@ -251,11 +251,11 @@ __global__ void preprocessCUDA(int P, int D, int M,
 		rgb[idx * C + 2] = result.z;
 	}
 
-	// assign values
 	depths[idx] = p_view.z;
 	radii[idx] = (int)radius;
 	points_xy_image[idx] = center;
-	conic_opacity[idx] = {normal.x, normal.y, normal.z, opacities[idx]};
+	// store them in float4
+	normal_opacity[idx] = {normal.x, normal.y, normal.z, opacities[idx]};
 	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
 }
 
@@ -271,14 +271,14 @@ renderCUDA(
 	float focal_x, float focal_y,
 	const float2* __restrict__ points_xy_image,
 	const float* __restrict__ features,
-	const float* __restrict__ cov3Ds,
+	const float* __restrict__ transMats,
 	const float* __restrict__ depths,
-	const float4* __restrict__ conic_opacity,
+	const float4* __restrict__ normal_opacity,
 	float* __restrict__ final_T,
 	uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ bg_color,
 	float* __restrict__ out_color,
-	float* __restrict__ out_depth)
+	float* __restrict__ out_others)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -302,7 +302,7 @@ renderCUDA(
 	// Allocate storage for batches of collectively fetched data.
 	__shared__ int collected_id[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
-	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
+	__shared__ float4 collected_normal_opacity[BLOCK_SIZE];
 	__shared__ float3 collected_Tu[BLOCK_SIZE];
 	__shared__ float3 collected_Tv[BLOCK_SIZE];
 	__shared__ float3 collected_Tw[BLOCK_SIZE];
@@ -321,9 +321,9 @@ renderCUDA(
 	float dist1 = {0};
 	float dist2 = {0};
 	float distortion = {0};
-	float max_depth = {0};
-	float max_weight = {0};
-	float max_contributor = {-1};
+	float median_depth = {0};
+	float median_weight = {0};
+	float median_contributor = {-1};
 
 #endif
 
@@ -342,10 +342,10 @@ renderCUDA(
 			int coll_id = point_list[range.x + progress];
 			collected_id[block.thread_rank()] = coll_id;
 			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
-			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
-			collected_Tu[block.thread_rank()] = {cov3Ds[9 * coll_id+0], cov3Ds[9 * coll_id+1], cov3Ds[9 * coll_id+2]};
-			collected_Tv[block.thread_rank()] = {cov3Ds[9 * coll_id+3], cov3Ds[9 * coll_id+4], cov3Ds[9 * coll_id+5]};
-			collected_Tw[block.thread_rank()] = {cov3Ds[9 * coll_id+6], cov3Ds[9 * coll_id+7], cov3Ds[9 * coll_id+8]};
+			collected_normal_opacity[block.thread_rank()] = normal_opacity[coll_id];
+			collected_Tu[block.thread_rank()] = {transMats[9 * coll_id+0], transMats[9 * coll_id+1], transMats[9 * coll_id+2]};
+			collected_Tv[block.thread_rank()] = {transMats[9 * coll_id+3], transMats[9 * coll_id+4], transMats[9 * coll_id+5]};
+			collected_Tw[block.thread_rank()] = {transMats[9 * coll_id+6], transMats[9 * coll_id+7], transMats[9 * coll_id+8]};
 		}
 		block.sync();
 
@@ -355,15 +355,13 @@ renderCUDA(
 			// Keep track of current position in range
 			contributor++;
 
-			// compute ray-splat intersection
-			// float2 xy = collected_xy[j];
+			// Fisrt compute two homogeneous planes, See Eq. (8)
 			float3 Tu = collected_Tu[j];
 			float3 Tv = collected_Tv[j];
 			float3 Tw = collected_Tw[j];
-			// compute two planes intersection as the ray intersection
 			float3 k = {-Tu.x + pixf.x * Tw.x, -Tu.y + pixf.x * Tw.y, -Tu.z + pixf.x * Tw.z};
 			float3 l = {-Tv.x + pixf.y * Tw.x, -Tv.y + pixf.y * Tw.y, -Tv.z + pixf.y * Tw.z};
-
+			// Then, cross product and norm to get the intersection, See Eq. (10)
 			float3 p = crossProduct(k, l);
 #if BACKFACE_CULL
 			if (p.z == 0.0) continue; // there is not intersection
@@ -371,7 +369,7 @@ renderCUDA(
 			float2 s = {p.x / p.z, p.y / p.z};
 			float rho3d = (s.x * s.x + s.y * s.y); // splat distance
 			
-			// add low pass filter according to Botsch et al. [2005]. 
+			// add low pass filter according to Botsch et al. [2005], Eq. (11). 
 			float2 xy = collected_xy[j];
 			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
 			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); // screen distance
@@ -379,9 +377,8 @@ renderCUDA(
 			
 			float depth = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z; // splat depth
 			if (depth < NEAR_PLANE) continue;
-
-			float4 con_o = collected_conic_opacity[j];
-			float normal[3] = {con_o.x, con_o.y, con_o.z};
+			float4 nor_o = collected_normal_opacity[j];
+			float normal[3] = {nor_o.x, nor_o.y, nor_o.z};
 			float power = -0.5f * rho;
 			// power = -0.5f * 100.f * max(rho - 1, 0.0f);
 			if (power > 0.0f)
@@ -391,7 +388,7 @@ renderCUDA(
 			// Obtain alpha by multiplying with Gaussian opacity
 			// and its exponential falloff from mean.
 			// Avoid numerical instabilities (see paper appendix). 
-			float alpha = min(0.99f, con_o.w * exp(power));
+			float alpha = min(0.99f, nor_o.w * exp(power));
 			if (alpha < 1.0f / 255.0f)
 				continue;
 			float test_T = T * (1 - alpha);
@@ -403,23 +400,24 @@ renderCUDA(
 
 
 #if RENDER_AXUTILITY
-			// render depth distortion map
+			// Render depth distortion map
+			// Efficient implementation of distortion loss, see 2DGS' paper appendix.
 			float A = 1-T;
 			float mapped_depth = (FAR_PLANE * depth - FAR_PLANE * NEAR_PLANE) / ((FAR_PLANE - NEAR_PLANE) * depth);
 			float error = mapped_depth * mapped_depth * A + dist2 - 2 * mapped_depth * dist1;
 			distortion += error * alpha * T;
 
 			if (T > 0.5) {
-				max_depth = depth;
-				max_weight = alpha * T;
-				max_contributor = contributor;
+				median_depth = depth;
+				median_weight = alpha * T;
+				median_contributor = contributor;
 			}
-			// render normal map
+			// Render normal map
 			for (int ch=0; ch<3; ch++) N[ch] += normal[ch] * alpha * T;
 
-			// render depth map
+			// Render depth map
 			D += depth * alpha * T;
-			// mapped depth
+			// Efficient implementation of distortion loss, see 2DGS' paper appendix.
 			dist1 += mapped_depth * alpha * T;
 			dist2 += mapped_depth * mapped_depth * alpha * T;
 #endif
@@ -445,15 +443,15 @@ renderCUDA(
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
 
 #if RENDER_AXUTILITY
-		n_contrib[pix_id + H * W] = max_contributor;
+		n_contrib[pix_id + H * W] = median_contributor;
 		final_T[pix_id + H * W] = dist1;
 		final_T[pix_id + 2 * H * W] = dist2;
-		out_depth[pix_id + DEPTH_OFFSET * H * W] = D;
-		out_depth[pix_id + ALPHA_OFFSET * H * W] = 1 - T;
-		for (int ch=0; ch<3; ch++) out_depth[pix_id + (NORMAL_OFFSET+ch) * H * W] = N[ch];
-		out_depth[pix_id + MAXDEPTH_OFFSET * H * W] = max_depth;
-		out_depth[pix_id + DISTORTION_OFFSET * H * W] = distortion;
-		out_depth[pix_id + MAX_WEIGHT_OFFSET * H * W] = max_weight;
+		out_others[pix_id + DEPTH_OFFSET * H * W] = D;
+		out_others[pix_id + ALPHA_OFFSET * H * W] = 1 - T;
+		for (int ch=0; ch<3; ch++) out_others[pix_id + (NORMAL_OFFSET+ch) * H * W] = N[ch];
+		out_others[pix_id + MIDDEPTH_OFFSET * H * W] = median_depth;
+		out_others[pix_id + DISTORTION_OFFSET * H * W] = distortion;
+		out_others[pix_id + MEDIAN_WEIGHT_OFFSET * H * W] = median_weight;
 #endif
 	}
 }
@@ -466,14 +464,14 @@ void FORWARD::render(
 	float focal_x, float focal_y,
 	const float2* means2D,
 	const float* colors,
-	const float* cov3Ds,
+	const float* transMats,
 	const float* depths,
-	const float4* conic_opacity,
+	const float4* normal_opacity,
 	float* final_T,
 	uint32_t* n_contrib,
 	const float* bg_color,
 	float* out_color,
-	float* out_depth)
+	float* out_others)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
 		ranges,
@@ -482,14 +480,14 @@ void FORWARD::render(
 		focal_x, focal_y,
 		means2D,
 		colors,
-		cov3Ds,
+		transMats,
 		depths,
-		conic_opacity,
+		normal_opacity,
 		final_T,
 		n_contrib,
 		bg_color,
 		out_color,
-		out_depth);
+		out_others);
 }
 
 void FORWARD::preprocess(int P, int D, int M,
@@ -500,7 +498,7 @@ void FORWARD::preprocess(int P, int D, int M,
 	const float* opacities,
 	const float* shs,
 	bool* clamped,
-	const float* cov3D_precomp,
+	const float* transMat_precomp,
 	const float* colors_precomp,
 	const float* viewmatrix,
 	const float* projmatrix,
@@ -511,9 +509,9 @@ void FORWARD::preprocess(int P, int D, int M,
 	int* radii,
 	float2* means2D,
 	float* depths,
-	float* cov3Ds,
+	float* transMats,
 	float* rgb,
-	float4* conic_opacity,
+	float4* normal_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
 	bool prefiltered)
@@ -527,7 +525,7 @@ void FORWARD::preprocess(int P, int D, int M,
 		opacities,
 		shs,
 		clamped,
-		cov3D_precomp,
+		transMat_precomp,
 		colors_precomp,
 		viewmatrix, 
 		projmatrix,
@@ -538,9 +536,9 @@ void FORWARD::preprocess(int P, int D, int M,
 		radii,
 		means2D,
 		depths,
-		cov3Ds,
+		transMats,
 		rgb,
-		conic_opacity,
+		normal_opacity,
 		grid,
 		tiles_touched,
 		prefiltered

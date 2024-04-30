@@ -29,7 +29,7 @@ namespace FORWARD
 		const float* opacities,
 		const float* shs,
 		bool* clamped,
-		const float* cov3D_precomp,
+		const float* transMat_precomp,
 		const float* colors_precomp,
 		const float* viewmatrix,
 		const float* projmatrix,
@@ -42,9 +42,9 @@ namespace FORWARD
 		float* depths,
 		// float* isovals,
 		// float3* normals,
-		float* cov3Ds,
+		float* transMats,
 		float* colors,
-		float4* conic_opacity,
+		float4* normal_opacity,
 		const dim3 grid,
 		uint32_t* tiles_touched,
 		bool prefiltered);
@@ -58,14 +58,14 @@ namespace FORWARD
 		float focal_x, float focal_y,
 		const float2* points_xy_image,
 		const float* features,
-		const float* cov3Ds,
+		const float* transMats,
 		const float* depths,
-		const float4* conic_opacity,
+		const float4* normal_opacity,
 		float* final_T,
 		uint32_t* n_contrib,
 		const float* bg_color,
 		float* out_color,
-		float* out_depth);
+		float* out_others);
 }
 
 
