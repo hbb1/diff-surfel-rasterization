@@ -70,7 +70,8 @@ __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const 
 	return glm::max(result, 0.0f);
 }
 
-
+// Compute a 2D-to-2D mapping matrix from a tangent plane into a image plane
+// given a 2D gaussian parameters.
 __device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, const glm::vec2 &scale, const float *viewmat, const float4 &intrins, float tan_fovx, float tan_fovy, float* cov3D, float3 &normal) {
 	// camera information 
 	const glm::mat3 W = glm::mat3(
@@ -81,6 +82,7 @@ __device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, co
 
 
 	const glm::vec3 cam_pos = glm::vec3(viewmat[12], viewmat[13], viewmat[14]); // camera center
+	// currently only support ideal pinhole camera, but more advanced intrins can be implemented
 	const glm::mat4 P = glm::mat4(
 		intrins.x, 0.0, 0.0, 0.0,
 		0.0, intrins.y, 0.0, 0.0,
@@ -90,37 +92,18 @@ __device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, co
 
 	glm::vec3 p_view = W * p_world + cam_pos;
 	glm::mat3 R = quat_to_rotmat(quat) * scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
-
-#if VIEW_FRUSTUM_CULLING
-#if PLUS_R
-	const float r = max(glm::length(R[0]), glm::length(R[1])) / p_view.z;
-#else
-	const float r = 0.0f;
-#endif
-	const float limx = CLIP_THRESH * tan_fovx + r;
-	const float limy = CLIP_THRESH * tan_fovy + r;
-	// culing spalt that outside the view frustum
-	const float pxpz = (p_view.x) / p_view.z;
-	const float pypz = (p_view.y) / p_view.z;
-#if HARD_CULLING
-	if (pxpz < -limx || pxpz > limx || pypz < -limy || pypz > limy) {
-		return false;
-	}
-#else
-	p_view.x = min(limx, max(-limx, pxpz)) * p_view.z;
-	p_view.y = min(limy, max(-limy, pypz)) * p_view.z;
-#endif
-#endif
-
 	glm::mat3 M = glm::mat3(W * R[0], W * R[1], p_view);
-	// don't draw if the matrix is singular
-	// if (glm::determinant(M) == 0.0f) return false;
-	// back face culling ? or parallel face culling?
 	glm::vec3 tn = W*R[2];
 	float cos = glm::dot(-tn, p_view);
+
+#if BACKFACE_CULL
+// Maybe not need culling in such extrem case
 	if (cos == 0.0f) return false;
+#endif
 
 #if RENDER_AXUTILITY and DUAL_VISIABLE
+// This means a 2D Gaussian is dual visiable.
+// Experimentally, turning off the dual visiable works eqully.
 	float multiplier = cos > 0 ? 1 : -1;
 	tn *= multiplier;
 #endif
@@ -144,6 +127,9 @@ __device__ bool computeCov3D(const glm::vec3 &p_world, const glm::vec4 &quat, co
 	return true;
 }
 
+// Computing the bounding box of the 2D Gaussian and its center,
+// where the center of the bounding box is used to create a low pass filter
+// in the image plane
 __device__ bool computeCenter(const float *cov3D, float2 & center, float2 & extent) {
 	glm::mat4x3 T = glm::mat4x3(
 		cov3D[0], cov3D[1], cov3D[2],
@@ -244,10 +230,9 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	if (!ok) return;
 
 	// add the bounding of countour
-#if TIGHTBBOX
+#if TIGHTBBOX // no use in the paper, but it indeed help speeds.
 	// the effective extent is now depended on the opacity of gaussian.
 	float truncated_R = sqrtf(max(9.f + logf(opacities[idx]), 0.000001));
-	// if (truncated_R < 1.0) printf("%.2f\n", truncated_R);
 #else
 	float truncated_R = 3.f;
 #endif
@@ -272,11 +257,6 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	points_xy_image[idx] = center;
 	conic_opacity[idx] = {normal.x, normal.y, normal.z, opacities[idx]};
 	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
-
-	// if (idx % 32 == 0) {
-	//     printf("%d center %.4f %.4f\n", idx, center.x, center.y);
-	//     printf("%d extent %.4f %.4f %.4f\n", idx, extent.x, extent.y);
-	// }
 }
 
 // Main rasterization method. Collaboratively works on one tile per
@@ -385,11 +365,9 @@ renderCUDA(
 			float3 l = {-Tv.x + pixf.y * Tw.x, -Tv.y + pixf.y * Tw.y, -Tv.z + pixf.y * Tw.z};
 
 			float3 p = crossProduct(k, l);
-
-#if SKIL_NEGATIVE
+#if BACKFACE_CULL
 			if (p.z == 0.0) continue; // there is not intersection
 #endif
-
 			float2 s = {p.x / p.z, p.y / p.z};
 			float rho3d = (s.x * s.x + s.y * s.y); // splat distance
 			
@@ -399,16 +377,9 @@ renderCUDA(
 			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); // screen distance
 			float rho = min(rho3d, rho2d);
 			
-			// compute accurate depth when necessary
-#if RENDER_AXUTILITY and INTERSECT_DEPTH
-			// float depth = (s.x * Tw.x + s.y * Tw.y) + Tw.z;
 			float depth = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z; // splat depth
-#if SKIL_NEGATIVE
 			if (depth < NEAR_PLANE) continue;
-#endif
-#else
-			float depth = Tw.z; // center depth
-#endif
+
 			float4 con_o = collected_conic_opacity[j];
 			float normal[3] = {con_o.x, con_o.y, con_o.z};
 			float power = -0.5f * rho;
@@ -432,40 +403,17 @@ renderCUDA(
 
 
 #if RENDER_AXUTILITY
-// render distortion map
+			// render depth distortion map
 			float A = 1-T;
-#if MAPPED_Z
 			float mapped_depth = (FAR_PLANE * depth - FAR_PLANE * NEAR_PLANE) / ((FAR_PLANE - NEAR_PLANE) * depth);
-#else		
-			float mapped_depth = depth;
-#endif
 			float error = mapped_depth * mapped_depth * A + dist2 - 2 * mapped_depth * dist1;
 			distortion += error * alpha * T;
 
-			// if (alpha * T >= max_weight) {
 			if (T > 0.5) {
 				max_depth = depth;
 				max_weight = alpha * T;
 				max_contributor = contributor;
 			}
-
-#if DEBUG
-			if (collected_id[j] > 0 && pix.x == W / 4 && pix.y == H / 2) {
-				printf("%d forward %d %d\n", contributor, pix.x, pix.y);
-				printf("%d forward %d normal %.4f %.4f %.4f\n", contributor, normal[0], normal[1], normal[2]);
-				printf("%d forward %d A %.8f\n", contributor, collected_id[j], A);
-				printf("%d forward %d depth %.8f\n", contributor, collected_id[j], depth);
-				printf("%d forward %d D %.8f\n", contributor, collected_id[j], D);
-				printf("%d forward %d alpha %.8f\n", contributor, collected_id[j], alpha);
-				printf("%d forward %d last_alpha %.8f\n", contributor, collected_id[j], 1-T);
-				printf("%d forward %d A %.8f\n", contributor, collected_id[j], A);
-				printf("%d forward %d error %.8f\n", contributor, collected_id[j], error);
-				printf("%d forward %d loss %.8f\n", contributor, collected_id[j], distortion);
-				printf("%d forward %d map_depth %.8f\n", contributor, collected_id[j], mapped_depth);
-				printf("%d forward %d contrib %d\n", contributor, collected_id[j], max_contributor);
-				printf("-----------\n");
-			}
-#endif
 			// render normal map
 			for (int ch=0; ch<3; ch++) N[ch] += normal[ch] * alpha * T;
 

@@ -291,31 +291,22 @@ renderCUDA(
 			float3 l = {-Tv.x + pixf.y * Tw.x, -Tv.y + pixf.y * Tw.y, -Tv.z + pixf.y * Tw.z};
 
 			float3 p = crossProduct(k, l);
-
-#if SKIL_NEGATIVE
+#if BACKFACE_CULL
 			if (p.z == 0.0) continue; // there is not intersection
 #endif
-
 			float2 s = {p.x / p.z, p.y / p.z};
 			float rho3d = (s.x * s.x + s.y * s.y); // splat distance
 			
 			// add low pass filter according to Botsch et al. [2005].
-			// float2 xy = {Tu.z / Tw.z, Tv.z / Tw.z};
 			float2 xy = collected_xy[j];
 			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
 			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); // screen distance
 			float rho = min(rho3d, rho2d);
 			
 			// compute accurate depth when necessary
-#if INTERSECT_DEPTH
-			// float c_d = (s.x * Tw.x + s.y * Tw.y) + Tw.z;
 			float c_d = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z;
-#if SKIL_NEGATIVE
 			if (c_d < NEAR_PLANE) continue;
-#endif
-#else
-			float c_d = Tw.z;
-#endif
+
 			float4 con_o = collected_conic_opacity[j];
 			float normal[3] = {con_o.x, con_o.y, con_o.z};
 
@@ -354,18 +345,13 @@ renderCUDA(
 			float dL_dz = 0.0f;
 			float dL_dweight = 0;
 #if RENDER_AXUTILITY
-#if MAPPED_Z
 			float m_d = (FAR_PLANE * c_d - FAR_PLANE * NEAR_PLANE) / ((FAR_PLANE - NEAR_PLANE) * c_d);
 			float dmd_dd = (FAR_PLANE * NEAR_PLANE) / ((FAR_PLANE - NEAR_PLANE) * c_d * c_d);
-#else
-			float md = c_d;
-			float dmd_dd = 1;
-#endif
 			if (contributor == max_contributor-1) {
 				dL_dz += dL_dmax_depth;
 				dL_dweight += dL_dmax_dweight;
 			}
-#if detach_weight
+#if DETACH_WEIGHT
 			dL_dweight += 0;
 #else
 			dL_dweight += (final_D2 + m_d * m_d * final_A - 2 * m_d * final_D) * dL_dreg;
@@ -411,34 +397,13 @@ renderCUDA(
 			dL_dz += alpha * T * dL_ddepth; 
 #endif
 
-#if DEBUG
-			if (collected_id[j] > 0 && pix.x == W / 4 && pix.y == H / 2) {
-				printf("%d backward %d depth %.8f\n", contributor, collected_id[j], c_d);
-				// printf("%d backward %d D %.8f\n", contributor, collected_id[j], D);
-				printf("%d backward %d T %.8f\n", contributor, collected_id[j], T);
-				printf("%d backward %d dL_dalpha %.8f\n", contributor, collected_id[j], dL_dalpha);
-				printf("%d backward %d dL_dmd %.8f\n", contributor, collected_id[j], dL_dmd);
-				printf("%d backward %d dL_dz %.8f\n", contributor, collected_id[j], dL_dz);
-				printf("%d backward %d max_contrib %d\n", contributor, collected_id[j], max_contributor);
-				printf("-----------\n");
-			}
-#endif
-
 			if (rho3d <= rho2d) {
 				// Update gradients w.r.t. covariance of Gaussian 3x3 (T)
-#if INTERSECT_DEPTH
 				float2 dL_ds = {
 					dL_dG * -G * s.x + dL_dz * Tw.x,
 					dL_dG * -G * s.y + dL_dz * Tw.y
 				};
 				float3 dz_dTw = {s.x, s.y, 1.0};
-#else
-				float2 dL_ds = {
-					dL_dG * -G * s.x,
-					dL_dG * -G * s.y
-				};
-				float3 dz_dTw = {0.0, 0.0, 1.0};
-#endif
 				float dsx_pz = dL_ds.x / p.z;
 				float dsy_pz = dL_ds.y / p.z;
 				float3 dL_dp = {dsx_pz, dsy_pz, -(dsx_pz * s.x + dsy_pz * s.y)};
@@ -463,40 +428,13 @@ renderCUDA(
 				atomicAdd(&dL_dcov3D[global_id * 9 + 6],  dL_dTw.x);
 				atomicAdd(&dL_dcov3D[global_id * 9 + 7],  dL_dTw.y);
 				atomicAdd(&dL_dcov3D[global_id * 9 + 8],  dL_dTw.z);
-
-				// __syncthreads();
-				// for testing the correctness of gradients
-				// if (global_id == 0 && pix.x == 0 && pix.y == H / 2) {
-				// 	printf("%d pix (%.4f %.4f)\n", global_id, pixf.x, pixf.y);
-				// 	printf("%d G %.4f\n", global_id, G);
-				// 	printf("%d depth %.8f\n", global_id, c_d);
-				// 	// printf("%d rho3d %.8f\n", global_id, rho3d);
-				// 	printf("%d dL_dG %.8f\n", global_id, dL_dG);
-				// 	printf("%d dL_dddepth %.8f\n", global_id, dL_ddepth);
-				// 	printf("%d Tu %.8f %.8f %.8f\n", global_id, Tu.x, Tu.y, Tu.z);
-				// 	printf("%d Tv %.8f %.8f %.8f\n", global_id, Tv.x, Tv.y, Tv.z);
-				// 	printf("%d Tw %.8f %.8f %.8f\n", global_id, Tw.x, Tw.y, Tw.z);
-				// 	printf("%d dL_dTu %.8f %.8f %.8f\n", global_id, dL_dTu.x, dL_dTu.y, dL_dTu.z);
-				// 	printf("%d dL_dTv %.8f %.8f %.8f\n", global_id, dL_dTv.x, dL_dTv.y, dL_dTv.z);
-				// 	printf("%d dL_dTw %.8f %.8f %.8f\n", global_id, dL_dTw.x, dL_dTw.y, dL_dTw.z);
-				// }
-
 			} else {
 				// // Update gradients w.r.t. center of Gaussian 2D mean position
 				float dG_ddelx = -G * FilterInvSquare * d.x;
 				float dG_ddely = -G * FilterInvSquare * d.y;
-				// atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx); // not scaled
-				// atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely); // not scaled
 				atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx); // not scaled
 				atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely); // not scaled
 				atomicAdd(&dL_dcov3D[global_id * 9 + 8],  dL_dz); // propagate depth loss
-				// float inv_Twz = 1 / Tw.z;
-				// float dL_dTuz = dL_dG * dG_ddelx * inv_Twz;
-				// float dL_dTvz = dL_dG * dG_ddely * inv_Twz;
-				// float dL_dTwz = dL_dG * dG_ddelx * (-Tu.z * inv_Twz * inv_Twz) + dL_dG * dG_ddely * (-Tv.z * inv_Twz * inv_Twz) + dL_ddepth; // add depth loss here
-				// atomicAdd(&dL_dcov3D[global_id * 9 + 2],  dL_dTuz); // propagate loss
-				// atomicAdd(&dL_dcov3D[global_id * 9 + 5],  dL_dTvz); // propagate loss
-				// atomicAdd(&dL_dcov3D[global_id * 9 + 8],  dL_dTwz); // propagate loss
 			}
 
 			// Update gradients w.r.t. opacity of the Gaussian
@@ -505,7 +443,7 @@ renderCUDA(
 	}
 }
 
-inline __device__ void computeCov3D(
+inline __device__ void computeMapping(
 	const glm::vec3 & p_world,
 	const glm::vec4 & quat,
 	const glm::vec2 & scale,
@@ -539,24 +477,6 @@ inline __device__ void computeCov3D(
 	glm::mat3 R = quat_to_rotmat(quat);
 	glm::mat3 RS = R * S;
 	glm::vec3 p_view = W * p_world + cam_pos;
-
-#if VIEW_FRUSTUM_CULLING and not HARD_CULLING
-#if PLUS_R
-	const float r = max(glm::length(R[0]), glm::length(R[1])) / p_view.z;
-#else
-	const float r = 0.0f;
-#endif
-	const float limx = CLIP_THRESH * tan_fovx + r;
-	const float limy = CLIP_THRESH * tan_fovy + r;
-	const float pxpz = (p_view.x) / p_view.z;
-	const float pypz = (p_view.y) / p_view.z;
-	const float xclip = min(limx, max(-limx, pxpz));
-	const float yclip = min(limy, max(-limy, pypz));
-	p_view.x = xclip * p_view.z;
-	p_view.y = yclip * p_view.z;
-	const float x_grad_mul = pxpz < -limx || pxpz > limx ? 0 : 1;
-	const float y_grad_mul = pypz < -limy || pypz > limy ? 0 : 1;
-#endif
 	glm::mat3 M = glm::mat3(W * RS[0], W * RS[1], p_view);
 
 
@@ -574,11 +494,6 @@ inline __device__ void computeCov3D(
 		glm::vec3(dL_dM_aug[2])
 	);
 
-#if VIEW_FRUSTUM_CULLING and not HARD_CULLING
-	dL_dM[2].z += (1-x_grad_mul) * xclip * dL_dM[2].x + (1-y_grad_mul) * yclip * dL_dM[2].y;
-	dL_dM[2].x *= x_grad_mul;
-	dL_dM[2].y *= y_grad_mul;
-#endif
 	glm::mat3 W_t = glm::transpose(W);
 	glm::mat3 dL_dRS = W_t * dL_dM;
 	glm::vec3 dL_dRS0 = dL_dRS[0];
@@ -606,22 +521,6 @@ inline __device__ void computeCov3D(
 	);
 
 	dL_dmean3D = dL_dpw;
-	// unsigned idx = cg::this_grid().thread_rank(); // idx of thread within grid
-	// if (idx == 0) {
-	// 		glm::mat4x3 T = glm::transpose(P * glm::mat3x4(
-	// 		glm::vec4(M[0], 0.0),
-	// 		glm::vec4(M[1], 0.0),
-	// 		glm::vec4(M[2], 1.0)
-	// 	));
-	// 	printf("T %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, T[0].x, T[0].y, T[0].z, T[1].x, T[1].y, T[1].z, T[2].x, T[2].y, T[2].z, T[3].x, T[3].y, T[3].z);
-	//     printf("dL_dT %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dT[0].x, dL_dT[0].y, dL_dT[0].z, dL_dT[1].x, dL_dT[1].y, dL_dT[1].z, dL_dT[2].x, dL_dT[2].y, dL_dT[2].z, dL_dT[3].x, dL_dT[3].y, dL_dT[3].z);
-	//     printf("dL_dM %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dM[0].x, dL_dM[0].y, dL_dM[0].z, dL_dM[1].x, dL_dM[1].y, dL_dM[1].z, dL_dM[2].x, dL_dM[2].y, dL_dM[2].z);
-	// 	printf("dL_dM_aug %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dM_aug[0].x, dL_dM_aug[0].y, dL_dM_aug[0].z, dL_dM_aug[0].w, dL_dM_aug[1].x, dL_dM_aug[1].y, dL_dM_aug[1].z, dL_dM_aug[1].w, dL_dM_aug[2].x, dL_dM_aug[2].y, dL_dM_aug[2].z, dL_dM_aug[2].w);
-	//     printf("dL_dR %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dR[0].x, dL_dR[0].y, dL_dR[0].z, dL_dR[1].x, dL_dR[1].y, dL_dR[1].z, dL_dR[2].x, dL_dR[2].y, dL_dR[2].z);
-	// 	printf("dL_dscale %d [%.8f, %.8f, %.8f]\n", idx, dL_dscale.x, dL_dscale.y, dL_dscale.z);
-	// 	printf("dL_drot %d [%.8f, %.8f, %.8f, %.8f]\n", idx, dL_drot.x, dL_drot.y, dL_drot.z, dL_drot.w);
-	// 	printf("dL_dmean3d %d [%.8f, %.8f, %.8f]\n", idx, dL_dmean3D.x, dL_dmean3D.y, dL_dmean3D.z);
-	// }
 }
 
 
@@ -668,7 +567,7 @@ __global__ void preprocessCUDA(
 	glm::vec3 dL_dmean3D;
 	glm::vec2 dL_dscale;
 	glm::vec4 dL_drot;
-	computeCov3D(
+	computeMapping(
 		p_world,
 		rotations[idx],
 		scales[idx],
@@ -738,16 +637,10 @@ __global__ void computeCenter(int P,
 	dL_dcov3Ds[9 * idx + 7] += dL_dT3.y;
 	dL_dcov3Ds[9 * idx + 8] += dL_dT3.z;
 
+	// just use to hack the projected 2D gradient here.
 	float z = cov3D[8];
 	dL_dmean2Ds[idx].x = dL_dcov3Ds[9 * idx + 2] * z * W; // to ndc 
 	dL_dmean2Ds[idx].y = dL_dcov3Ds[9 * idx + 5] * z * H; // to ndc
-	// if (idx == 0) {
-	// 	printf("dL_dmean2d %d [%.8f, %.8f]\n", idx, dL_dmean2D.x, dL_dmean2D.y);
-	// 	printf("T %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, T[0].x, T[0].y, T[0].z, T[1].x, T[1].y, T[1].z, T[2].x, T[2].y, T[2].z, T[3].x, T[3].y, T[3].z);
-	//     printf("dL_dT %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dT0.x, dL_dT0.y, dL_dT0.z, dL_dT1.x, dL_dT1.y, dL_dT1.z, dL_dT3.x, dL_dT3.y, dL_dT3.z);
-	//     // printf("dL_dM %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dM[0].x, dL_dM[0].y, dL_dM[0].z, dL_dM[1].x, dL_dM[1].y, dL_dM[1].z, dL_dM[2].x, dL_dM[2].y, dL_dM[2].z);
-	// 	// printf("dL_dM_aug %d [%.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f, %.8f]\n", idx, dL_dM_aug[0].x, dL_dM_aug[0].y, dL_dM_aug[0].z, dL_dM_aug[0].w, dL_dM_aug[1].x, dL_dM_aug[1].y, dL_dM_aug[1].z, dL_dM_aug[1].w, dL_dM_aug[2].x, dL_dM_aug[2].y, dL_dM_aug[2].z, dL_dM_aug[2].w);
-	// }
 }
 
 

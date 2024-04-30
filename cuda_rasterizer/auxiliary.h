@@ -17,11 +17,9 @@
 
 #define BLOCK_SIZE (BLOCK_X * BLOCK_Y)
 #define NUM_WARPS (BLOCK_SIZE/32)
-// #define FilterSize 0.47140452079103173  // sqrt(2) / 3
-// #define FilterSize 0.33333 // * 0.5 // sqrt(2) / 2
 #define FilterSize 0.7071067811865476
 #define FilterInvSquare 1/(FilterSize*FilterSize)
-#define INTERSECT_DEPTH 1 // if use accurate depth or center depth
+
 #define TIGHTBBOX 0
 #define RENDER_AXUTILITY 1
 #define DEPTH_OFFSET 0
@@ -31,18 +29,12 @@
 #define DISTORTION_OFFSET 6
 #define MAX_WEIGHT_OFFSET 7
 
-#define DEBUG 0
+// distortion helper macros
+#define BACKFACE_CULL 1
 #define DUAL_VISIABLE 1
 #define NEAR_PLANE 0.2
 #define FAR_PLANE 100.0
-#define VIEW_FRUSTUM_CULLING 0
-#define HARD_CULLING 1
-#define CLIP_THRESH 1.1f
-#define SKIL_NEGATIVE 1
-#define MAPPED_Z 1
-#define PLUS_R 1
-#define detach_weight 0
-// #define SMOOTH_THRESHOLD 0.0001
+#define DETACH_WEIGHT 1
 
 // Spherical harmonics coefficients
 __device__ const float SH_C0 = 0.28209479177387814f;
