@@ -102,8 +102,8 @@ __device__ bool computeTransMat(const glm::vec3 &p_world, const glm::vec4 &quat,
 #endif
 
 #if RENDER_AXUTILITY and DUAL_VISIABLE
-// This means a 2D Gaussian is dual visiable.
-// Experimentally, turning off the dual visiable works eqully.
+	// This means a 2D Gaussian is dual visiable.
+	// Experimentally, turning off the dual visiable works eqully.
 	float multiplier = cos > 0 ? 1 : -1;
 	tn *= multiplier;
 #endif
@@ -208,7 +208,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float4 intrins = {focal_x, focal_y, float(W)/2.0, float(H)/2.0};
 	glm::vec2 scale = scales[idx];
 	glm::vec4 quat = rotations[idx];
-	// view frustum cullling TODO
+	
 	const float* transMat;
 	bool ok;
 	float3 normal;
@@ -361,18 +361,24 @@ renderCUDA(
 			float3 Tw = collected_Tw[j];
 			float3 k = {-Tu.x + pixf.x * Tw.x, -Tu.y + pixf.x * Tw.y, -Tu.z + pixf.x * Tw.z};
 			float3 l = {-Tv.x + pixf.y * Tw.x, -Tv.y + pixf.y * Tw.y, -Tv.z + pixf.y * Tw.z};
-			// Then, cross product and norm to get the intersection, See Eq. (10)
+			// cross product of two planes is a line (i.e., homogeneous point), See Eq. (10)
 			float3 p = crossProduct(k, l);
 #if BACKFACE_CULL
+			// May hanle this by replacing a low pass filter,
+			// but this case is extremely rare.
 			if (p.z == 0.0) continue; // there is not intersection
 #endif
+			// 3d homogeneous point to 2d point on the splat
 			float2 s = {p.x / p.z, p.y / p.z};
-			float rho3d = (s.x * s.x + s.y * s.y); // splat distance
+			// 3d distance. Compute Mahalanobis distance in the canonical splat' space
+			float rho3d = (s.x * s.x + s.y * s.y); 
 			
-			// add low pass filter according to Botsch et al. [2005], Eq. (11). 
+			// Add low pass filter according to Botsch et al. [2005], 
+			// see Eq. (11) from 2DGS paper. 
 			float2 xy = collected_xy[j];
 			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
-			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); // screen distance
+			// 2d screen distance
+			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); 
 			float rho = min(rho3d, rho2d);
 			
 			float depth = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z; // splat depth

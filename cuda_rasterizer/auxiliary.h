@@ -34,7 +34,7 @@
 #define DUAL_VISIABLE 1
 #define NEAR_PLANE 0.2
 #define FAR_PLANE 100.0
-#define DETACH_WEIGHT 1
+#define DETACH_WEIGHT 0
 
 // Spherical harmonics coefficients
 __device__ const float SH_C0 = 0.28209479177387814f;

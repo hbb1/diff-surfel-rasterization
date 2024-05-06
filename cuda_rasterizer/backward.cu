@@ -286,21 +286,27 @@ renderCUDA(
 			// compute two planes intersection as the ray intersection
 			float3 k = {-Tu.x + pixf.x * Tw.x, -Tu.y + pixf.x * Tw.y, -Tu.z + pixf.x * Tw.z};
 			float3 l = {-Tv.x + pixf.y * Tw.x, -Tv.y + pixf.y * Tw.y, -Tv.z + pixf.y * Tw.z};
-
+			// cross product of two planes is a line (i.e., homogeneous point), See Eq. (10)
 			float3 p = crossProduct(k, l);
 #if BACKFACE_CULL
+			// May hanle this by replacing a low pass filter,
+			// but this case is extremely rare.
 			if (p.z == 0.0) continue; // there is not intersection
 #endif
-			float2 s = {p.x / p.z, p.y / p.z};
+
+			float2 s = {p.x / p.z, p.y / p.z}; 
+			// Compute Mahalanobis distance in the canonical splat' space
 			float rho3d = (s.x * s.x + s.y * s.y); // splat distance
 			
-			// add low pass filter according to Botsch et al. [2005].
+			// Add low pass filter according to Botsch et al. [2005],
+			// see Eq. (11) from 2DGS paper. 
 			float2 xy = collected_xy[j];
+			// 2d screen distance
 			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
 			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); // screen distance
 			float rho = min(rho3d, rho2d);
 			
-			// compute accurate depth when necessary
+			// Compute accurate depth when necessary
 			float c_d = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z;
 			if (c_d < NEAR_PLANE) continue;
 
@@ -348,7 +354,9 @@ renderCUDA(
 				dL_dz += dL_dmedian_depth;
 				dL_dweight += dL_dmax_dweight;
 			}
-#if DETACH_WEIGHT
+#if DETACH_WEIGHT 
+			// if not detached weight, sometimes 
+			// it will bia toward creating extragated 2D Gaussians near front
 			dL_dweight += 0;
 #else
 			dL_dweight += (final_D2 + m_d * m_d * final_A - 2 * m_d * final_D) * dL_dreg;
