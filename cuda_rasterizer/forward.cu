@@ -83,8 +83,8 @@ __device__ void computeTransMat(const glm::vec3 &p_world, const glm::vec4 &quat,
 	);
 
 	glm::mat3x4 ndc2pix = glm::mat3x4(
-		glm::vec4(float(W) / 2.0, 0.0, 0.0, float(W) / 2.0),
-		glm::vec4(0.0, float(H) / 2.0, 0.0, float(H) / 2.0),
+		glm::vec4(float(W) / 2.0, 0.0, 0.0, float(W-1) / 2.0),
+		glm::vec4(0.0, float(H) / 2.0, 0.0, float(H-1) / 2.0),
 		glm::vec4(0.0, 0.0, 0.0, 1.0)
 	);
 
@@ -275,7 +275,7 @@ renderCUDA(
 	uint2 pix_max = { min(pix_min.x + BLOCK_X, W), min(pix_min.y + BLOCK_Y , H) };
 	uint2 pix = { pix_min.x + block.thread_index().x, pix_min.y + block.thread_index().y };
 	uint32_t pix_id = W * pix.y + pix.x;
-	float2 pixf = { (float)pix.x + 0.5, (float)pix.y + 0.5};
+	float2 pixf = { (float)pix.x, (float)pix.y};
 
 	// Check if this thread is associated with a valid pixel or outside.
 	bool inside = pix.x < W&& pix.y < H;

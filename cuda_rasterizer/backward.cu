@@ -170,7 +170,7 @@ renderCUDA(
 	const uint2 pix_max = { min(pix_min.x + BLOCK_X, W), min(pix_min.y + BLOCK_Y , H) };
 	const uint2 pix = { pix_min.x + block.thread_index().x, pix_min.y + block.thread_index().y };
 	const uint32_t pix_id = W * pix.y + pix.x;
-	const float2 pixf = { (float)pix.x + 0.5, (float)pix.y + 0.5};
+	const float2 pixf = {(float)pix.x, (float)pix.y};
 
 	const bool inside = pix.x < W&& pix.y < H;
 	const uint2 range = ranges[block.group_index().y * horizontal_blocks + block.group_index().x];
@@ -471,8 +471,8 @@ inline __device__ void computeTransMat(
 	);
 
 	glm::mat3x4 ndc2pix = glm::mat3x4(
-		glm::vec4(float(W) / 2.0, 0.0, 0.0, float(W) / 2.0),
-		glm::vec4(0.0, float(H) / 2.0, 0.0, float(H) / 2.0),
+		glm::vec4(float(W) / 2.0, 0.0, 0.0, float(W-1) / 2.0),
+		glm::vec4(0.0, float(H) / 2.0, 0.0, float(H-1) / 2.0),
 		glm::vec4(0.0, 0.0, 0.0, 1.0)
 	);
 
