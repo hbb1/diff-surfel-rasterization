@@ -549,36 +549,38 @@ __global__ void preprocessCUDA(
 	if (idx >= P || !(radii[idx] > 0))
 		return;
 
-	const float* transMat = &(transMats[9 * idx]);
-	const float* dL_dtransMat = &(dL_dtransMats[9 * idx]);
-	const float* dL_dnormal3D = &(dL_dnormal3Ds[3 * idx]);
+	if (scales) {
+		const float* transMat = &(transMats[9 * idx]);
+		const float* dL_dtransMat = &(dL_dtransMats[9 * idx]);
+		const float* dL_dnormal3D = &(dL_dnormal3Ds[3 * idx]);
 
-	glm::vec3 p_world = glm::vec3(means3D[idx].x, means3D[idx].y, means3D[idx].z);
+		glm::vec3 p_world = glm::vec3(means3D[idx].x, means3D[idx].y, means3D[idx].z);
 
-	const int W = int(focal_x * tan_fovx * 2);
-	const int H = int(focal_y * tan_fovy * 2);
-	glm::vec3 dL_dmean3D;
-	glm::vec2 dL_dscale;
-	glm::vec4 dL_drot;
-	computeTransMat(
-		p_world,
-		rotations[idx],
-		scales[idx],
-		viewmatrix,
-		projmatrix,
-		W,
-		H,
-		transMat, 
-		dL_dtransMat,
-		dL_dnormal3D,
-		dL_dmean3D, 
-		dL_dscale,
-		dL_drot
-	);
-	// update 
-	dL_dmean3Ds[idx] = dL_dmean3D;
-	dL_dscales[idx] = dL_dscale;
-	dL_drots[idx] = dL_drot;
+		const int W = int(focal_x * tan_fovx * 2);
+		const int H = int(focal_y * tan_fovy * 2);
+		glm::vec3 dL_dmean3D;
+		glm::vec2 dL_dscale;
+		glm::vec4 dL_drot;
+		computeTransMat(
+			p_world,
+			rotations[idx],
+			scales[idx],
+			viewmatrix,
+			projmatrix,
+			W,
+			H,
+			transMat, 
+			dL_dtransMat,
+			dL_dnormal3D,
+			dL_dmean3D, 
+			dL_dscale,
+			dL_drot
+		);
+		// update 
+		dL_dmean3Ds[idx] = dL_dmean3D;
+		dL_dscales[idx] = dL_dscale;
+		dL_drots[idx] = dL_drot;
+	}
 
 	if (shs)
 		computeColorFromSH(idx, D, M, (glm::vec3*)means3D, *campos, shs, clamped, (glm::vec3*)dL_dcolors, (glm::vec3*)dL_dmean3Ds, (glm::vec3*)dL_dshs);

@@ -203,6 +203,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	if (transMat_precomp != nullptr)
 	{
 		transMat = transMat_precomp + idx * 9;
+		normal = {0.f, 0.f, 0.f}; // not support precomp normal
 	}
 	else
 	{

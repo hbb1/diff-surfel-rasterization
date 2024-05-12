@@ -62,13 +62,6 @@ RasterizeGaussiansCUDA(
 	AT_ERROR("means3D must have dimensions (num_points, 3)");
   }
 
-  if (scales.ndimension() != 2 || scales.size(1) != 2) {
-	AT_ERROR("scales must have dimensions (num_points, 2)");
-  }
-
-  if (rotations.ndimension() != 2 || rotations.size(1) != 4) {
-	AT_ERROR("rotations must have dimensions (num_points, 4)");
-  }
   
   const int P = means3D.size(0);
   const int H = image_height;
