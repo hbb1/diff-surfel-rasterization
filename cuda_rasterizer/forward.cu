@@ -220,7 +220,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	// add the bounding of countour
 #if TIGHTBBOX // no use in the paper, but it indeed help speeds.
 	// the effective extent is now depended on the opacity of gaussian.
-	float truncated_R = sqrtf(max(9.f + logf(opacities[idx]), 0.000001));
+	float truncated_R = sqrtf(max(9.f + 2.f * logf(opacities[idx]), 0.000001));
 #else
 	float truncated_R = 3.f;
 #endif
