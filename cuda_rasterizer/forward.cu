@@ -72,47 +72,33 @@ __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const 
 
 // Compute a 2D-to-2D mapping matrix from a tangent plane into a image plane
 // given a 2D gaussian parameters.
-__device__ bool computeTransMat(const glm::vec3 &p_world, const glm::vec4 &quat, const glm::vec2 &scale, const float *viewmat, const float4 &intrins, float tan_fovx, float tan_fovy, float* transMat, float3 &normal) {
-	// Setup cameras
-	// Currently only support ideal pinhole camera
-	// but more advanced intrins can be implemented
-	const glm::mat3 W = glm::mat3(
-		viewmat[0],viewmat[1],viewmat[2],
-		viewmat[4],viewmat[5],viewmat[6],
-		viewmat[8],viewmat[9],viewmat[10]
-	); 
-	const glm::vec3 cam_pos = glm::vec3(viewmat[12], viewmat[13], viewmat[14]); // camera center
-	const glm::mat4 P = glm::mat4(
-		intrins.x, 0.0, 0.0, 0.0,
-		0.0, intrins.y, 0.0, 0.0,
-		intrins.z, intrins.w, 1.0, 1.0,
-		0.0, 0.0, 0.0, 0.0
+__device__ void computeTransMat(const glm::vec3 &p_world, const glm::vec4 &quat, const glm::vec2 &scale, const float *viewmat, const float*projmat, const int W, const int H, float* transMat, float3 &normal) {
+	// setup camera
+	// can be fatored out to reduce computations
+	glm::mat4 world2ndc = glm::mat4(
+		projmat[0], projmat[4], projmat[8], projmat[12],
+		projmat[1], projmat[5], projmat[9], projmat[13],
+		projmat[2], projmat[6], projmat[10], projmat[14],
+		projmat[3], projmat[7], projmat[11], projmat[15]
 	);
 
+	glm::mat3x4 ndc2pix = glm::mat3x4(
+		glm::vec4(float(W) / 2.0, 0.0, 0.0, float(W-1) / 2.0),
+		glm::vec4(0.0, float(H) / 2.0, 0.0, float(H-1) / 2.0),
+		glm::vec4(0.0, 0.0, 0.0, 1.0)
+	);
+
+	glm::mat3x4 P = world2ndc * ndc2pix;
 	// Make the geometry of 2D Gaussian as a Homogeneous transformation matrix 
 	// under the camera view, See Eq. (5) in 2DGS' paper.
-	glm::vec3 p_view = W * p_world + cam_pos;
-	glm::mat3 R = quat_to_rotmat(quat) * scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
-	glm::mat3 M = glm::mat3(W * R[0], W * R[1], p_view);
-	glm::vec3 tn = W*R[2];
-	float cos = glm::dot(-tn, p_view);
-
-#if BACKFACE_CULL
-	if (cos == 0.0f) return false;
-#endif
-
-#if RENDER_AXUTILITY and DUAL_VISIABLE
-	// This means a 2D Gaussian is dual visiable.
-	// Experimentally, turning off the dual visiable works eqully.
-	float multiplier = cos > 0 ? 1 : -1;
-	tn *= multiplier;
-#endif
-	// projection into screen space, see Eq. (7)
-	glm::mat4x3 T = glm::transpose(P * glm::mat3x4(
-		glm::vec4(M[0], 0.0),
-		glm::vec4(M[1], 0.0),
-		glm::vec4(M[2], 1.0)
-	));
+	glm::mat3 RS = quat_to_rotmat(quat) * scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
+	glm::mat3x4 splat2world = glm::mat3x4(
+		glm::vec4(RS[0], 0.0),
+		glm::vec4(RS[1], 0.0),
+		glm::vec4(p_world, 1.0)
+	);
+	// projection into screen space, see Eq. (7) in 2DGS
+	glm::mat3 T = glm::transpose(splat2world) * P;
 
 	transMat[0] = T[0].x;
 	transMat[1] = T[0].y;
@@ -123,8 +109,15 @@ __device__ bool computeTransMat(const glm::vec3 &p_world, const glm::vec4 &quat,
 	transMat[6] = T[2].x;
 	transMat[7] = T[2].y;
 	transMat[8] = T[2].z;
-	normal = {tn.x, tn.y, tn.z};
-	return true;
+
+	normal = transformVec4x3({RS[2].x, RS[2].y, RS[2].z}, viewmat);
+
+#if DUAL_VISIABLE
+	// This means a 2D Gaussian is dual visiable.
+	// Experimentally, turning off the dual visiable works eqully.
+	float multiplier = normal.z < 0 ? 1: -1;
+	normal = {multiplier * normal.x, multiplier * normal.y, multiplier * normal.z};
+#endif
 }
 
 // Computing the bounding box of the 2D Gaussian and its center,
@@ -205,34 +198,29 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, prefiltered, p_view))
 		return;
 	
-	float4 intrins = {focal_x, focal_y, float(W)/2.0, float(H)/2.0};
-	glm::vec2 scale = scales[idx];
-	glm::vec4 quat = rotations[idx];
-	
 	const float* transMat;
-	bool ok;
 	float3 normal;
 	if (transMat_precomp != nullptr)
 	{
 		transMat = transMat_precomp + idx * 9;
+		normal = {0.f, 0.f, 0.f}; // not support precomp normal
 	}
 	else
 	{
-		ok = computeTransMat(p_world, quat, scale, viewmatrix, intrins, tan_fovx, tan_fovy, transMats + idx * 9, normal);
-		if (!ok) return;
+		computeTransMat(p_world, rotations[idx], scales[idx], viewmatrix, projmatrix, W, H, transMats + idx * 9, normal);
 		transMat = transMats + idx * 9;
 	}
 	
 	//  compute center and extent
 	float2 center;
 	float2 extent;
-	ok = computeAABB(transMat, center, extent);
+	bool ok = computeAABB(transMat, center, extent);
 	if (!ok) return;
 
 	// add the bounding of countour
 #if TIGHTBBOX // no use in the paper, but it indeed help speeds.
 	// the effective extent is now depended on the opacity of gaussian.
-	float truncated_R = sqrtf(max(9.f + logf(opacities[idx]), 0.000001));
+	float truncated_R = sqrtf(max(9.f + 2.f * logf(opacities[idx]), 0.000001));
 #else
 	float truncated_R = 3.f;
 #endif
@@ -287,7 +275,7 @@ renderCUDA(
 	uint2 pix_max = { min(pix_min.x + BLOCK_X, W), min(pix_min.y + BLOCK_Y , H) };
 	uint2 pix = { pix_min.x + block.thread_index().x, pix_min.y + block.thread_index().y };
 	uint32_t pix_id = W * pix.y + pix.x;
-	float2 pixf = { (float)pix.x + 0.5, (float)pix.y + 0.5};
+	float2 pixf = { (float)pix.x, (float)pix.y};
 
 	// Check if this thread is associated with a valid pixel or outside.
 	bool inside = pix.x < W&& pix.y < H;

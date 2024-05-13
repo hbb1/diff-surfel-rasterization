@@ -17,7 +17,7 @@ os.path.dirname(os.path.abspath(__file__))
 setup(
     name="diff_surfel_rasterization",
     packages=['diff_surfel_rasterization'],
-    version='0.0.0',
+    version='0.0.1',
     ext_modules=[
         CUDAExtension(
             name="diff_surfel_rasterization._C",

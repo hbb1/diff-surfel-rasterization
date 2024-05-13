@@ -170,7 +170,7 @@ renderCUDA(
 	const uint2 pix_max = { min(pix_min.x + BLOCK_X, W), min(pix_min.y + BLOCK_Y , H) };
 	const uint2 pix = { pix_min.x + block.thread_index().x, pix_min.y + block.thread_index().y };
 	const uint32_t pix_id = W * pix.y + pix.x;
-	const float2 pixf = { (float)pix.x + 0.5, (float)pix.y + 0.5};
+	const float2 pixf = {(float)pix.x, (float)pix.y};
 
 	const bool inside = pix.x < W&& pix.y < H;
 	const uint2 range = ranges[block.group_index().y * horizontal_blocks + block.group_index().x];
@@ -453,9 +453,9 @@ inline __device__ void computeTransMat(
 	const glm::vec4 & quat,
 	const glm::vec2 & scale,
 	const float* viewmat,
-	const float4 & intrins,
-	float tan_fovx, 
-	float tan_fovy,
+	const float* projmat,
+	const int W,
+	const int H,
 	const float* transMat,
 	const float* dL_dtransMat,
 	const float* dL_dnormal3D,
@@ -463,69 +463,56 @@ inline __device__ void computeTransMat(
 	glm::vec2 & dL_dscale,
 	glm::vec4 & dL_drot
 ) {
-	// camera information 
-	const glm::mat3 W = glm::mat3(
-		viewmat[0],viewmat[1],viewmat[2],
-		viewmat[4],viewmat[5],viewmat[6],
-		viewmat[8],viewmat[9],viewmat[10]
-	); // viewmat 
-
-	const glm::vec3 cam_pos = glm::vec3(viewmat[12], viewmat[13], viewmat[14]); // camera center
-	const glm::mat4 P = glm::mat4(
-		intrins.x, 0.0, 0.0, 0.0,
-		0.0, intrins.y, 0.0, 0.0,
-		intrins.z, intrins.w, 1.0, 1.0,
-		0.0, 0.0, 0.0, 0.0
+	glm::mat4 world2ndc = glm::mat4(
+		projmat[0], projmat[4], projmat[8], projmat[12],
+		projmat[1], projmat[5], projmat[9], projmat[13],
+		projmat[2], projmat[6], projmat[10], projmat[14],
+		projmat[3], projmat[7], projmat[11], projmat[15]
 	);
 
-	glm::mat3 S = scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
-	glm::mat3 R = quat_to_rotmat(quat);
-	glm::mat3 RS = R * S;
-	glm::vec3 p_view = W * p_world + cam_pos;
-	glm::mat3 M = glm::mat3(W * RS[0], W * RS[1], p_view);
+	glm::mat3x4 ndc2pix = glm::mat3x4(
+		glm::vec4(float(W) / 2.0, 0.0, 0.0, float(W-1) / 2.0),
+		glm::vec4(0.0, float(H) / 2.0, 0.0, float(H-1) / 2.0),
+		glm::vec4(0.0, 0.0, 0.0, 1.0)
+	);
 
+	glm::mat3x4 P = world2ndc * ndc2pix;
 
-	glm::mat4x3 dL_dT = glm::mat4x3(
+	glm::mat3 dL_dT = glm::mat3(
 		dL_dtransMat[0], dL_dtransMat[1], dL_dtransMat[2],
 		dL_dtransMat[3], dL_dtransMat[4], dL_dtransMat[5],
-		dL_dtransMat[6], dL_dtransMat[7], dL_dtransMat[8],
-		0.0, 0.0, 0.0
+		dL_dtransMat[6], dL_dtransMat[7], dL_dtransMat[8]
 	);
 
-	glm::mat3x4 dL_dM_aug = glm::transpose(P) * glm::transpose(dL_dT);
-	glm::mat3 dL_dM = glm::mat3(
-		glm::vec3(dL_dM_aug[0]),
-		glm::vec3(dL_dM_aug[1]),
-		glm::vec3(dL_dM_aug[2])
-	);
+	glm::mat3x4 dL_dsplat = P * glm::transpose(dL_dT);
 
-	glm::mat3 W_t = glm::transpose(W);
-	glm::mat3 dL_dRS = W_t * dL_dM;
-	glm::vec3 dL_dRS0 = dL_dRS[0];
-	glm::vec3 dL_dRS1 = dL_dRS[1];
-	glm::vec3 dL_dpw = dL_dRS[2];
-	glm::vec3 dL_dtn = W_t * glm::vec3(dL_dnormal3D[0], dL_dnormal3D[1], dL_dnormal3D[2]);
+	const glm::mat3 R = quat_to_rotmat(quat);
 
-#if DUAL_VISIABLE
-	glm::vec3 tn = W*R[2];
-	float cos = glm::dot(-tn, M[2]);
-	float multiplier = cos > 0 ? 1 : -1;
-	dL_dtn *= multiplier;
+	float multiplier = 1;
+
+#if  DUAL_VISIABLE
+	float3 normal = transformVec4x3({R[2].x, R[2].y, R[2].z}, viewmat);
+	multiplier = normal.z < 0 ? 1: -1;
 #endif
 
-	glm::mat3 dL_dR = glm::mat3(
-		dL_dRS0 * glm::vec3(scale.x),
-		dL_dRS1 * glm::vec3(scale.y),
-		dL_dtn
+	float3 dL_dtn = transformVec4x3Transpose({dL_dnormal3D[0],dL_dnormal3D[1],dL_dnormal3D[2]}, viewmat);
+	glm::mat3 dL_dRS = glm::mat3(
+		glm::vec3(dL_dsplat[0]),
+		glm::vec3(dL_dsplat[1]),
+		multiplier * glm::vec3(dL_dtn.x, dL_dtn.y, dL_dtn.z)
 	);
 
+	// propagate to scale and quat, mean
+	glm::mat3 dL_dR = glm::mat3(
+		dL_dRS[0] * glm::vec3(scale.x),
+		dL_dRS[1] * glm::vec3(scale.y),
+		dL_dRS[2]);
+
+	dL_dmean3D = glm::vec3(dL_dsplat[2]);
 	dL_drot = quat_to_rotmat_vjp(quat, dL_dR);
 	dL_dscale = glm::vec2(
-		(float)glm::dot(dL_dRS0, R[0]),
-		(float)glm::dot(dL_dRS1, R[1])
-	);
-
-	dL_dmean3D = dL_dpw;
+		(float)glm::dot(dL_dRS[0], R[0]),
+		(float)glm::dot(dL_dRS[1], R[1]));
 }
 
 
@@ -562,35 +549,38 @@ __global__ void preprocessCUDA(
 	if (idx >= P || !(radii[idx] > 0))
 		return;
 
-	const float* transMat = &(transMats[9 * idx]);
-	const float* dL_dtransMat = &(dL_dtransMats[9 * idx]);
-	const float* dL_dnormal3D = &(dL_dnormal3Ds[3 * idx]);
+	if (scales) {
+		const float* transMat = &(transMats[9 * idx]);
+		const float* dL_dtransMat = &(dL_dtransMats[9 * idx]);
+		const float* dL_dnormal3D = &(dL_dnormal3Ds[3 * idx]);
 
-	glm::vec3 p_world = glm::vec3(means3D[idx].x, means3D[idx].y, means3D[idx].z);
-	float4 intrins = {focal_x, focal_y, focal_x * tan_fovx, focal_y * tan_fovy};
+		glm::vec3 p_world = glm::vec3(means3D[idx].x, means3D[idx].y, means3D[idx].z);
 
-	glm::vec3 dL_dmean3D;
-	glm::vec2 dL_dscale;
-	glm::vec4 dL_drot;
-	computeTransMat(
-		p_world,
-		rotations[idx],
-		scales[idx],
-		viewmatrix,
-		intrins,
-		tan_fovx,
-		tan_fovy,
-		transMat, 
-		dL_dtransMat,
-		dL_dnormal3D,
-		dL_dmean3D, 
-		dL_dscale,
-		dL_drot
-	);
-	// update 
-	dL_dmean3Ds[idx] = dL_dmean3D;
-	dL_dscales[idx] = dL_dscale;
-	dL_drots[idx] = dL_drot;
+		const int W = int(focal_x * tan_fovx * 2);
+		const int H = int(focal_y * tan_fovy * 2);
+		glm::vec3 dL_dmean3D;
+		glm::vec2 dL_dscale;
+		glm::vec4 dL_drot;
+		computeTransMat(
+			p_world,
+			rotations[idx],
+			scales[idx],
+			viewmatrix,
+			projmatrix,
+			W,
+			H,
+			transMat, 
+			dL_dtransMat,
+			dL_dnormal3D,
+			dL_dmean3D, 
+			dL_dscale,
+			dL_drot
+		);
+		// update 
+		dL_dmean3Ds[idx] = dL_dmean3D;
+		dL_dscales[idx] = dL_dscale;
+		dL_drots[idx] = dL_drot;
+	}
 
 	if (shs)
 		computeColorFromSH(idx, D, M, (glm::vec3*)means3D, *campos, shs, clamped, (glm::vec3*)dL_dcolors, (glm::vec3*)dL_dmean3Ds, (glm::vec3*)dL_dshs);
