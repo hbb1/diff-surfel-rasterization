@@ -203,6 +203,8 @@ renderCUDA(
 	float dL_dpixel[C];
 
 #if RENDER_AXUTILITY
+	const float far_n = FAR_PLANE;
+	const float near_n = NEAR_PLANE;
 	float dL_dreg;
 	float dL_ddepth;
 	float dL_daccum;
@@ -219,7 +221,7 @@ renderCUDA(
 			dL_dnormal2D[i] = dL_depths[(NORMAL_OFFSET + i) * H * W + pix_id];
 
 		dL_dmedian_depth = dL_depths[MIDDEPTH_OFFSET * H * W + pix_id];
-		dL_dmax_dweight = dL_depths[MEDIAN_WEIGHT_OFFSET * H * W + pix_id];
+		// dL_dmax_dweight = dL_depths[MEDIAN_WEIGHT_OFFSET * H * W + pix_id];
 	}
 
 	// for compute gradient with respect to depth and normal
@@ -280,51 +282,42 @@ renderCUDA(
 				continue;
 
 			// compute ray-splat intersection as before
-			float3 Tu = collected_Tu[j];
-			float3 Tv = collected_Tv[j];
-			float3 Tw = collected_Tw[j];
-			// compute two planes intersection as the ray intersection
-			float3 k = {-Tu.x + pixf.x * Tw.x, -Tu.y + pixf.x * Tw.y, -Tu.z + pixf.x * Tw.z};
-			float3 l = {-Tv.x + pixf.y * Tw.x, -Tv.y + pixf.y * Tw.y, -Tv.z + pixf.y * Tw.z};
-			// cross product of two planes is a line (i.e., homogeneous point), See Eq. (10)
-			float3 p = crossProduct(k, l);
-#if BACKFACE_CULL
-			// May hanle this by replacing a low pass filter,
-			// but this case is extremely rare.
-			if (p.z == 0.0) continue; // there is not intersection
-#endif
-
-			float2 s = {p.x / p.z, p.y / p.z}; 
-			// Compute Mahalanobis distance in the canonical splat' space
-			float rho3d = (s.x * s.x + s.y * s.y); // splat distance
-			
-			// Add low pass filter according to Botsch et al. [2005],
-			// see Eq. (11) from 2DGS paper. 
-			float2 xy = collected_xy[j];
-			// 2d screen distance
+			// Fisrt compute two homogeneous planes, See Eq. (8)
+			const float2 xy = collected_xy[j];
+			const float3 Tu = collected_Tu[j];
+			const float3 Tv = collected_Tv[j];
+			const float3 Tw = collected_Tw[j];
+			float3 k = pix.x * Tw - Tu;
+			float3 l = pix.y * Tw - Tv;
+			float3 p = cross(k, l);
+			if (p.z == 0.0) continue;
+			float2 s = {p.x / p.z, p.y / p.z};
+			float rho3d = (s.x * s.x + s.y * s.y); 
 			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
-			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); // screen distance
-			float rho = min(rho3d, rho2d);
-			
-			// Compute accurate depth when necessary
-			float c_d = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z;
-			if (c_d < NEAR_PLANE) continue;
+			float rho2d = 2.0 * (d.x * d.x + d.y * d.y); 
 
+			// compute intersection and depth
+			float rho = min(rho3d, rho2d);
+			float c_d = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z; 
+			if (c_d < NEAR_PLANE) continue;
 			float4 nor_o = collected_normal_opacity[j];
 			float normal[3] = {nor_o.x, nor_o.y, nor_o.z};
+			float opa = nor_o.w;
+
+			// accumulations
 
 			float power = -0.5f * rho;
 			if (power > 0.0f)
 				continue;
 
 			const float G = exp(power);
-			const float alpha = min(0.99f, nor_o.w * G);
+			const float alpha = min(0.99f, opa * G);
 			if (alpha < 1.0f / 255.0f)
 				continue;
 
 			T = T / (1.f - alpha);
 			const float dchannel_dcolor = alpha * T;
-
+			const float w = alpha * T;
 			// Propagate gradients to per-Gaussian colors and keep
 			// gradients w.r.t. alpha (blending factor for a Gaussian/pixel
 			// pair).
@@ -348,11 +341,11 @@ renderCUDA(
 			float dL_dz = 0.0f;
 			float dL_dweight = 0;
 #if RENDER_AXUTILITY
-			float m_d = (FAR_PLANE * c_d - FAR_PLANE * NEAR_PLANE) / ((FAR_PLANE - NEAR_PLANE) * c_d);
-			float dmd_dd = (FAR_PLANE * NEAR_PLANE) / ((FAR_PLANE - NEAR_PLANE) * c_d * c_d);
+			const float m_d = (far_n * c_d - near_n * near_n) / ((far_n - near_n) * c_d);
+			const float dmd_dd = (far_n * near_n) / ((far_n - near_n) * c_d * c_d);
 			if (contributor == median_contributor-1) {
 				dL_dz += dL_dmedian_depth;
-				dL_dweight += dL_dmax_dweight;
+				// dL_dweight += dL_dmax_dweight;
 			}
 #if DETACH_WEIGHT 
 			// if not detached weight, sometimes 
@@ -364,7 +357,7 @@ renderCUDA(
 			dL_dalpha += dL_dweight - last_dL_dT;
 			// propagate the current weight W_{i} to next weight W_{i-1}
 			last_dL_dT = dL_dweight * alpha + (1 - alpha) * last_dL_dT;
-			float dL_dmd = 2.0f * (T * alpha) * (m_d * final_A - final_D) * dL_dreg;
+			const float dL_dmd = 2.0f * (T * alpha) * (m_d * final_A - final_D) * dL_dreg;
 			dL_dz += dL_dmd * dmd_dd;
 
 			// Propagate gradients w.r.t ray-splat depths
@@ -404,20 +397,20 @@ renderCUDA(
 
 			if (rho3d <= rho2d) {
 				// Update gradients w.r.t. covariance of Gaussian 3x3 (T)
-				float2 dL_ds = {
+				const float2 dL_ds = {
 					dL_dG * -G * s.x + dL_dz * Tw.x,
 					dL_dG * -G * s.y + dL_dz * Tw.y
 				};
-				float3 dz_dTw = {s.x, s.y, 1.0};
-				float dsx_pz = dL_ds.x / p.z;
-				float dsy_pz = dL_ds.y / p.z;
-				float3 dL_dp = {dsx_pz, dsy_pz, -(dsx_pz * s.x + dsy_pz * s.y)};
-				float3 dL_dk = crossProduct(l, dL_dp);
-				float3 dL_dl = crossProduct(dL_dp, k);
+				const float3 dz_dTw = {s.x, s.y, 1.0};
+				const float dsx_pz = dL_ds.x / p.z;
+				const float dsy_pz = dL_ds.y / p.z;
+				const float3 dL_dp = {dsx_pz, dsy_pz, -(dsx_pz * s.x + dsy_pz * s.y)};
+				const float3 dL_dk = cross(l, dL_dp);
+				const float3 dL_dl = cross(dL_dp, k);
 
-				float3 dL_dTu = {-dL_dk.x, -dL_dk.y, -dL_dk.z};
-				float3 dL_dTv = {-dL_dl.x, -dL_dl.y, -dL_dl.z};
-				float3 dL_dTw = {
+				const float3 dL_dTu = {-dL_dk.x, -dL_dk.y, -dL_dk.z};
+				const float3 dL_dTv = {-dL_dl.x, -dL_dl.y, -dL_dl.z};
+				const float3 dL_dTw = {
 					pixf.x * dL_dk.x + pixf.y * dL_dl.x + dL_dz * dz_dTw.x, 
 					pixf.x * dL_dk.y + pixf.y * dL_dl.y + dL_dz * dz_dTw.y, 
 					pixf.x * dL_dk.z + pixf.y * dL_dl.z + dL_dz * dz_dTw.z};
@@ -435,8 +428,8 @@ renderCUDA(
 				atomicAdd(&dL_dtransMat[global_id * 9 + 8],  dL_dTw.z);
 			} else {
 				// // Update gradients w.r.t. center of Gaussian 2D mean position
-				float dG_ddelx = -G * FilterInvSquare * d.x;
-				float dG_ddely = -G * FilterInvSquare * d.y;
+				const float dG_ddelx = -G * FilterInvSquare * d.x;
+				const float dG_ddely = -G * FilterInvSquare * d.y;
 				atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx); // not scaled
 				atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely); // not scaled
 				atomicAdd(&dL_dtransMat[global_id * 9 + 8],  dL_dz); // propagate depth loss

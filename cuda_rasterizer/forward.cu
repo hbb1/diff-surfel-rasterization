@@ -399,13 +399,15 @@ renderCUDA(
 
 #if RENDER_AXUTILITY
 	// render axutility ouput
-	float D = { 0 };
+	const float far_n = FAR_PLANE;
+	const float near_n = NEAR_PLANE;
 	float N[3] = {0};
-	float dist1 = {0};
-	float dist2 = {0};
+	float D = { 0 };
+	float M1 = {0};
+	float M2 = {0};
 	float distortion = {0};
 	float median_depth = {0};
-	float median_weight = {0};
+	// float median_weight = {0};
 	float median_contributor = {-1};
 
 #endif
@@ -439,37 +441,28 @@ renderCUDA(
 			contributor++;
 
 			// Fisrt compute two homogeneous planes, See Eq. (8)
-			float3 Tu = collected_Tu[j];
-			float3 Tv = collected_Tv[j];
-			float3 Tw = collected_Tw[j];
-			float3 k = {-Tu.x + pixf.x * Tw.x, -Tu.y + pixf.x * Tw.y, -Tu.z + pixf.x * Tw.z};
-			float3 l = {-Tv.x + pixf.y * Tw.x, -Tv.y + pixf.y * Tw.y, -Tv.z + pixf.y * Tw.z};
-			// cross product of two planes is a line (i.e., homogeneous point), See Eq. (10)
-			float3 p = crossProduct(k, l);
-#if BACKFACE_CULL
-			// May hanle this by replacing a low pass filter,
-			// but this case is extremely rare.
-			if (p.z == 0.0) continue; // there is not intersection
-#endif
-			// 3d homogeneous point to 2d point on the splat
+			const float2 xy = collected_xy[j];
+			const float3 Tu = collected_Tu[j];
+			const float3 Tv = collected_Tv[j];
+			const float3 Tw = collected_Tw[j];
+			float3 k = pix.x * Tw - Tu;
+			float3 l = pix.y * Tw - Tv;
+			float3 p = cross(k, l);
+			if (p.z == 0.0) continue;
 			float2 s = {p.x / p.z, p.y / p.z};
-			// 3d distance. Compute Mahalanobis distance in the canonical splat' space
 			float rho3d = (s.x * s.x + s.y * s.y); 
-			
-			// Add low pass filter according to Botsch et al. [2005], 
-			// see Eq. (11) from 2DGS paper. 
-			float2 xy = collected_xy[j];
 			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
-			// 2d screen distance
-			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); 
+			float rho2d = 2.0 * (d.x * d.x + d.y * d.y); 
+
+			// compute intersection and depth
 			float rho = min(rho3d, rho2d);
-			
-			float depth = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z; // splat depth
+			float depth = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z; 
 			if (depth < NEAR_PLANE) continue;
 			float4 nor_o = collected_normal_opacity[j];
 			float normal[3] = {nor_o.x, nor_o.y, nor_o.z};
+			float opa = nor_o.w;
+
 			float power = -0.5f * rho;
-			// power = -0.5f * 100.f * max(rho - 1, 0.0f);
 			if (power > 0.0f)
 				continue;
 
@@ -477,7 +470,7 @@ renderCUDA(
 			// Obtain alpha by multiplying with Gaussian opacity
 			// and its exponential falloff from mean.
 			// Avoid numerical instabilities (see paper appendix). 
-			float alpha = min(0.99f, nor_o.w * exp(power));
+			float alpha = min(0.99f, opa * exp(power));
 			if (alpha < 1.0f / 255.0f)
 				continue;
 			float test_T = T * (1 - alpha);
@@ -487,28 +480,24 @@ renderCUDA(
 				continue;
 			}
 
-
+			float w = alpha * T;
 #if RENDER_AXUTILITY
 			// Render depth distortion map
-			// Efficient implementation of distortion loss, see 2DGS' paper appendix.
+			// render depth
 			float A = 1-T;
-			float mapped_depth = (FAR_PLANE * depth - FAR_PLANE * NEAR_PLANE) / ((FAR_PLANE - NEAR_PLANE) * depth);
-			float error = mapped_depth * mapped_depth * A + dist2 - 2 * mapped_depth * dist1;
-			distortion += error * alpha * T;
+			float m = far_n / (far_n - near_n) * (1 - near_n / depth);
+			distortion += (m * m * A + M2 - 2 * m * M1) * w;
+			D  += depth * w;
+			M1 += m * w;
+			M2 += m * m * w;
 
 			if (T > 0.5) {
 				median_depth = depth;
-				median_weight = alpha * T;
+				// median_weight = w;
 				median_contributor = contributor;
 			}
 			// Render normal map
-			for (int ch=0; ch<3; ch++) N[ch] += normal[ch] * alpha * T;
-
-			// Render depth map
-			D += depth * alpha * T;
-			// Efficient implementation of distortion loss, see 2DGS' paper appendix.
-			dist1 += mapped_depth * alpha * T;
-			dist2 += mapped_depth * mapped_depth * alpha * T;
+			for (int ch=0; ch<3; ch++) N[ch] += normal[ch] * w;
 #endif
 
 			// Eq. (3) from 3D Gaussian splatting paper.
@@ -533,14 +522,14 @@ renderCUDA(
 
 #if RENDER_AXUTILITY
 		n_contrib[pix_id + H * W] = median_contributor;
-		final_T[pix_id + H * W] = dist1;
-		final_T[pix_id + 2 * H * W] = dist2;
+		final_T[pix_id + H * W] = M1;
+		final_T[pix_id + 2 * H * W] = M2;
 		out_others[pix_id + DEPTH_OFFSET * H * W] = D;
 		out_others[pix_id + ALPHA_OFFSET * H * W] = 1 - T;
 		for (int ch=0; ch<3; ch++) out_others[pix_id + (NORMAL_OFFSET+ch) * H * W] = N[ch];
 		out_others[pix_id + MIDDEPTH_OFFSET * H * W] = median_depth;
 		out_others[pix_id + DISTORTION_OFFSET * H * W] = distortion;
-		out_others[pix_id + MEDIAN_WEIGHT_OFFSET * H * W] = median_weight;
+		// out_others[pix_id + MEDIAN_WEIGHT_OFFSET * H * W] = median_weight;
 #endif
 	}
 }
