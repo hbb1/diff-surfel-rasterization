@@ -145,6 +145,114 @@ __device__ bool computeAABB(const glm::mat3 & transMat, float2 & center, float2 
 	return true;
 }
 
+__device__ void compute_radii_center(
+	const float3& p_orig,
+	const glm::vec2 scale,
+	const glm::vec4 rot,
+	const float* projmatrix,
+	const int W,
+	const int H, 
+	float3& rT0,
+	float3& rT1, 
+	float3& rT3, 
+	float3 &zaxis,
+	float2& p_pixel_xy,
+	float& radii
+) {
+		const float far_n = FAR_PLANE;
+		const float near_n = NEAR_PLANE;
+        // Create scaling matrix
+	    glm::mat3 S = glm::mat3(1.0f);
+	    S[0][0] = scale.x;
+	    S[1][1] = scale.y;
+	    // S[2][2] = scale.z;
+
+	    // Normalize quaternion to get valid rotation
+	    glm::vec4 q = rot;
+	    float r = q.x;
+	    float x = q.y;
+	    float y = q.z;
+	    float z = q.w;
+
+	    // Compute rotation matrix from quaternion
+	    glm::mat3 R = glm::mat3(
+		    1.f - 2.f * (y * y + z * z), 	2.f * (x * y - r * z), 			2.f * (x * z + r * y),
+		    2.f * (x * y + r * z), 			1.f - 2.f * (x * x + z * z), 	2.f * (y * z - r * x),
+		    2.f * (x * z - r * y), 			2.f * (y * z + r * x), 			1.f - 2.f * (x * x + y * y)
+	    );
+
+		zaxis = {2.f * (x * z + r * y), 
+				 2.f * (y * z - r * x), 
+				 1.f - 2.f * (x * x + y * y)};
+
+	    glm::mat3 L = S * R;
+
+        // center of Gaussians in the camera coordinate
+        glm::vec4 p_world = glm::vec4(p_orig.x, p_orig.y, p_orig.z, 1);
+
+		glm::mat4x2 M = glm::mat4x2(
+			L[0][0], L[0][1], 
+            L[1][0], L[1][1], 
+			L[2][0], L[2][1], 
+			0.0f   , 0.0f    
+		);
+
+		glm::mat4 World2Ndc = glm::mat4(
+			projmatrix[0], projmatrix[4], projmatrix[8], projmatrix[12],
+            projmatrix[1], projmatrix[5], projmatrix[9], projmatrix[13],
+            projmatrix[2], projmatrix[6], projmatrix[10], projmatrix[14],
+            projmatrix[3], projmatrix[7], projmatrix[11], projmatrix[15]
+		);
+		glm::mat4 Ndc2Pixel = glm::mat4(
+			float(W)/2,	0,		0,				float(W-1)/2,
+			0,		float(H)/2,	0,				float(H-1)/2,
+			0,		0,		far_n-near_n,	near_n,
+			0,		0,		0,				1 
+		);
+		glm::mat4 P = World2Ndc * Ndc2Pixel;
+
+		glm::vec4 p_pixel = p_world * P;
+        glm::mat4x2 uv_view = M * P;
+        glm::mat4x3 T = glm::mat4x3(
+            uv_view[0][0], uv_view[0][1], p_pixel.x,
+            uv_view[1][0], uv_view[1][1], p_pixel.y,
+			uv_view[2][0], uv_view[2][1], p_pixel.z,
+			uv_view[3][0], uv_view[3][1], p_pixel.w  
+        );
+
+        float3 T0 = {T[0][0], T[0][1], T[0][2]};
+        float3 T1 = {T[1][0], T[1][1], T[1][2]};
+        float3 T2 = {T[2][0], T[2][1], T[2][2]};
+        float3 T3 = {T[3][0], T[3][1], T[3][2]};
+
+		// Compute AABB
+        float3 temp_point = {1.0f, 1.0f, -1.0f};
+        float distance = sumf3(T3 * T3 * temp_point);
+		
+        float3 f = {
+			1 / (distance + 0.0000001f), 
+			1 / (distance + 0.0000001f), 
+			-1 / (distance + 0.0000001f)
+		};
+        float2 point_image = {
+            sumf3(f * T0 * T3),
+            sumf3(f * T1 * T3)
+        };  
+		
+        float2 temp = {
+            sumf3(f * T0 * T0),
+            sumf3(f * T1 * T1)
+		};
+        float2 half_extend = point_image * point_image - temp;
+        float2 radii2 = sqrtf2(maxf2(1e-4, half_extend));
+		
+		radii = 3.0f * ceil(max(radii2.x, radii2.y));
+		p_pixel_xy = {point_image.x, point_image.y};
+		rT0 = T0;
+		rT1 = T1;
+		rT3 = T3;
+}
+
 // Perform initial steps for each Gaussian prior to rasterization.
 template<int C>
 __global__ void preprocessCUDA(int P, int D, int M,
@@ -182,45 +290,35 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	radii[idx] = 0;
 	tiles_touched[idx] = 0;
 
-	glm::vec3 p_world = glm::vec3(orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2]);
 	// Perform near culling, quit if outside.
 	float3 p_view;
 	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, prefiltered, p_view))
 		return;
 	
 	// const float* transMat;
-	float3 normal;
-	glm::mat3 T;
-	if (transMat_precomp != nullptr)
-	{
-		const float * transMat = transMat_precomp + idx * 9;
-		T = glm::mat3(
-			transMat[0],transMat[1],transMat[2],
-			transMat[3],transMat[4],transMat[5],
-			transMat[6],transMat[7],transMat[8]
-		); 
-		normal = {0.f, 0.f, 0.f}; // not support precomp normal
-	} else {
-		computeTransMat(p_world, rotations[idx], scales[idx], viewmatrix, projmatrix, W, H, T, normal);
-	}
+	// float3 normal;
+	float3 p_world = { orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2] };
+	float radius;
+	float2 point_image;
+	float3 rT0, rT1, rT3;
+	float3 zaxis;
+	compute_radii_center(p_world, scales[idx], rotations[idx], projmatrix, W, H, rT0, rT1, rT3, zaxis, point_image, radius);
+	float3 normal = transformVec4x3(zaxis, viewmatrix);
+	if (sumf3(normal * p_view) > 0.f)
+		normal = {-normal.x, -normal.y, -normal.z};
 	
-	//  compute center and extent
-	float2 center;
-	float2 extent;
-	bool ok = computeAABB(T, center, extent);
-	if (!ok) return;
 
 	// add the bounding of countour
-#if TIGHTBBOX // no use in the paper, but it indeed help speeds.
-	// the effective extent is now depended on the opacity of gaussian.
-	float truncated_R = sqrtf(max(9.f + 2.f * logf(opacities[idx]), 0.000001));
-#else
-	float truncated_R = 2.f;
-#endif
-	float radius = ceil(truncated_R * max(max(extent.x, extent.y), FilterSize));
+// #if TIGHTBBOX // no use in the paper, but it indeed help speeds.
+// 	// the effective extent is now depended on the opacity of gaussian.
+// 	float truncated_R = sqrtf(max(9.f + 2.f * logf(opacities[idx]), 0.000001));
+// #else
+// 	float truncated_R = 2.f;
+// #endif
+// 	float radius = ceil(truncated_R * max(max(extent.x, extent.y), FilterSize));
 
 	uint2 rect_min, rect_max;
-	getRect(center, radius, rect_min, rect_max, grid);
+	getRect(point_image, radius, rect_min, rect_max, grid);
 	if ((rect_max.x - rect_min.x) * (rect_max.y - rect_min.y) == 0)
 		return;
 
@@ -232,24 +330,14 @@ __global__ void preprocessCUDA(int P, int D, int M,
 		rgb[idx * C + 2] = result.z;
 	}
 
-	if (transMat_precomp != nullptr) {
-		// no need to write to the buffer
-	} else {
-		float * transMat = transMats + idx * 9;
-		transMat[0] = T[0].x;
-		transMat[1] = T[0].y;
-		transMat[2] = T[0].z;
-		transMat[3] = T[1].x;
-		transMat[4] = T[1].y;
-		transMat[5] = T[1].z;
-		transMat[6] = T[2].x;
-		transMat[7] = T[2].y;
-		transMat[8] = T[2].z;
-	}
+	float3 *T_ptr = (float3*)transMats;
+	T_ptr[idx * 3 + 0] = rT0;
+	T_ptr[idx * 3 + 1] = rT1;
+	T_ptr[idx * 3 + 2] = rT3;
 
 	depths[idx] = p_view.z;
 	radii[idx] = (int)radius;
-	points_xy_image[idx] = center;
+	points_xy_image[idx] = point_image;
 	normal_opacity[idx] = {normal.x, normal.y, normal.z, opacities[idx]};
 	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
 }

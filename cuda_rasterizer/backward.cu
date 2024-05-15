@@ -539,6 +539,153 @@ inline __device__ void computeAABB(
 }
 
 
+__device__ void compute_radii_center(int idx, const float3& p_orig, const glm::vec2 scale, const glm::vec4 rot, const float* projmatrix, const int W, const int H, const float3* dL_dmean2D, const float3 dL_dnormal,
+glm::vec3* dL_dmeans, float3* dL_dT,  glm::vec2* dL_dscales, glm::vec4* dL_drots)
+{
+	const float far_n = FAR_PLANE;
+	const float near_n = NEAR_PLANE;
+	// Create scaling matrix
+	glm::mat3 S = glm::mat3(1.0f);
+	glm::vec2 s = scale;
+	S[0][0] = s.x;
+	S[1][1] = s.y;
+	// S[2][2] = s.z;
+
+	// Normalize quaternion to get valid rotation
+	glm::vec4 q = rot;
+	float r = q.x;
+	float x = q.y;
+	float y = q.z;
+	float z = q.w;
+
+	// Compute rotation matrix from quaternion
+	glm::mat3 R = glm::mat3(
+	    1.f - 2.f * (y * y + z * z), 2.f * (x * y - r * z), 2.f * (x * z + r * y),
+	    2.f * (x * y + r * z), 1.f - 2.f * (x * x + z * z), 2.f * (y * z - r * x),
+	    2.f * (x * z - r * y), 2.f * (y * z + r * x), 1.f - 2.f * (x * x + y * y)
+	);
+
+	glm::mat3 L = S * R;
+
+    // center of Gaussians in the ndc coordinate
+	glm::vec4 p_world = glm::vec4(p_orig.x, p_orig.y, p_orig.z, 1);
+    
+	glm::mat4x2 M = glm::mat4x2(
+		L[0][0], L[0][1],
+        L[1][0], L[1][1],
+		L[2][0], L[2][1],
+		0.0f   , 0.0f   
+	);
+
+	glm::mat4 World2Ndc = glm::mat4(
+		projmatrix[0], projmatrix[4], projmatrix[8], projmatrix[12],
+        projmatrix[1], projmatrix[5], projmatrix[9], projmatrix[13],
+        projmatrix[2], projmatrix[6], projmatrix[10], projmatrix[14],
+        projmatrix[3], projmatrix[7], projmatrix[11], projmatrix[15]
+	);
+	glm::mat4 Ndc2Pixel = glm::mat4(
+		float(W)/2,	0,		0,				float(W-1)/2,
+		0,		float(H)/2,	0,				float(H-1)/2,
+		0,		0,		far_n-near_n,	near_n,
+		0,		0,		0,				1 
+	);
+	glm::mat4 P = World2Ndc * Ndc2Pixel;
+
+	glm::vec4 p_pixel = p_world * P;
+    glm::mat4x2 uv_view = M * P;
+    glm::mat4x3 T = glm::mat4x3(
+        uv_view[0][0], uv_view[0][1], p_pixel.x,
+        uv_view[1][0], uv_view[1][1], p_pixel.y,
+		uv_view[2][0], uv_view[2][1], p_pixel.z,
+		uv_view[3][0], uv_view[3][1], p_pixel.w  
+    );
+
+    const float3 T0 = {T[0][0], T[0][1], T[0][2]};
+    const float3 T1 = {T[1][0], T[1][1], T[1][2]};
+    const float3 T3 = {T[3][0], T[3][1], T[3][2]};
+
+	const float3 temp_point = {1.0f, 1.0f, -1.0f};
+    float distance = sumf3(T3 * T3 * temp_point);
+
+	const float f = 1 / (distance + 0.0000001f);
+
+	if(dL_dmean2D[idx].x != 0 || dL_dmean2D[idx].y != 0)
+	{
+		const float dpx_dT00 = f * T3.x;
+		const float dpx_dT01 = f * T3.y;
+		const float dpx_dT02 = -f * T3.z;
+		const float dpy_dT10 = f * T3.x;
+		const float dpy_dT11 = f * T3.y;
+		const float dpy_dT12 = -f * T3.z;
+		const float dpx_dT30 = T0.x * (f - 2 * f * f * T3.x * T3.x);
+		const float dpx_dT31 = T0.y * (f - 2 * f * f * T3.y * T3.y);
+		const float dpx_dT32 = -T0.z * (f + 2 * f * f * T3.z * T3.z);
+		const float dpy_dT30 = T1.x * (f - 2 * f * f * T3.x * T3.x);
+		const float dpy_dT31 = T1.y * (f - 2 * f * f * T3.y * T3.y);
+		const float dpy_dT32 = -T1.z * (f + 2 * f * f * T3.z * T3.z);
+
+		dL_dT[idx*3+0].x += dL_dmean2D[idx].x * dpx_dT00;
+		dL_dT[idx*3+0].y += dL_dmean2D[idx].x * dpx_dT01;
+		dL_dT[idx*3+0].z += dL_dmean2D[idx].x * dpx_dT02;
+		dL_dT[idx*3+1].x += dL_dmean2D[idx].y * dpy_dT10;
+		dL_dT[idx*3+1].y += dL_dmean2D[idx].y * dpy_dT11;
+		dL_dT[idx*3+1].z += dL_dmean2D[idx].y * dpy_dT12;
+		dL_dT[idx*3+2].x += dL_dmean2D[idx].x * dpx_dT30 + dL_dmean2D[idx].y * dpy_dT30;
+		dL_dT[idx*3+2].y += dL_dmean2D[idx].x * dpx_dT31 + dL_dmean2D[idx].y * dpy_dT31;
+		dL_dT[idx*3+2].z += dL_dmean2D[idx].x * dpx_dT32 + dL_dmean2D[idx].y * dpy_dT32;
+	}
+	
+	dL_dmeans[idx].x += dL_dT[3*idx+0].z * P[0][0] + dL_dT[3*idx+1].z * P[1][0] + dL_dT[3*idx+2].z * P[3][0];
+	dL_dmeans[idx].y += dL_dT[3*idx+0].z * P[0][1] + dL_dT[3*idx+1].z * P[1][1] + dL_dT[3*idx+2].z * P[3][1];
+	dL_dmeans[idx].z += dL_dT[3*idx+0].z * P[0][2] + dL_dT[3*idx+1].z * P[1][2] + dL_dT[3*idx+2].z * P[3][2];
+
+	const float dL_dM00 = dL_dT[3*idx+0].x * P[0][0] + dL_dT[3*idx+1].x * P[1][0] + dL_dT[3*idx+2].x * P[3][0];
+	const float dL_dM10 = dL_dT[3*idx+0].x * P[0][1] + dL_dT[3*idx+1].x * P[1][1] + dL_dT[3*idx+2].x * P[3][1];
+	const float dL_dM20 = dL_dT[3*idx+0].x * P[0][2] + dL_dT[3*idx+1].x * P[1][2] + dL_dT[3*idx+2].x * P[3][2];
+
+	const float dL_dM01 = dL_dT[3*idx+0].y * P[0][0] + dL_dT[3*idx+1].y * P[1][0] + dL_dT[3*idx+2].y * P[3][0];
+	const float dL_dM11 = dL_dT[3*idx+0].y * P[0][1] + dL_dT[3*idx+1].y * P[1][1] + dL_dT[3*idx+2].y * P[3][1];
+	const float dL_dM21 = dL_dT[3*idx+0].y * P[0][2] + dL_dT[3*idx+1].y * P[1][2] + dL_dT[3*idx+2].y * P[3][2];
+
+	glm::mat3x2 dL_dM = glm::mat3x2{
+		dL_dM00, dL_dM01,
+		dL_dM10, dL_dM11,
+		dL_dM20, dL_dM21
+	};
+
+	glm::mat3 Rt = glm::transpose(R);
+	glm::mat2x3 dL_dMt = glm::transpose(dL_dM);
+
+	// Gradients of loss w.r.t. scale
+	glm::vec2* dL_dscale = dL_dscales + idx;
+	dL_dscale->x = glm::dot(Rt[0], dL_dMt[0]);
+	dL_dscale->y = glm::dot(Rt[1], dL_dMt[1]);
+
+	dL_dMt[0] *= s.x;
+	dL_dMt[1] *= s.y;
+
+	// Gradients of loss w.r.t. normalized quaternion
+	glm::vec4 dL_dq;
+	dL_dq.x = 2 * z * (dL_dMt[0][1] - dL_dMt[1][0]) + 2 * y * (- dL_dMt[0][2]) + 2 * x * (dL_dMt[1][2]);
+	dL_dq.y = 2 * y * (dL_dMt[1][0] + dL_dMt[0][1]) + 2 * z * (dL_dMt[0][2]) + 2 * r * (dL_dMt[1][2]) - 4 * x * (dL_dMt[1][1]);
+	dL_dq.z = 2 * x * (dL_dMt[1][0] + dL_dMt[0][1]) + 2 * r * (- dL_dMt[0][2]) + 2 * z * (dL_dMt[1][2]) - 4 * y * (dL_dMt[0][0]);
+	dL_dq.w = 2 * r * (dL_dMt[0][1] - dL_dMt[1][0]) + 2 * x * (dL_dMt[0][2]) + 2 * y * (dL_dMt[1][2]) - 4 * z * (dL_dMt[1][1] + dL_dMt[0][0]);
+
+	const float dLcon_dx = dL_dnormal.x * 2.f * z - dL_dnormal.y * 2.f * r - dL_dnormal.z * 4.f * x;
+	const float dLcon_dy = dL_dnormal.x * 2.f * r + dL_dnormal.y * 2.f * z - dL_dnormal.z * 4.f * y;
+	const float dLcon_dz = dL_dnormal.x * 2.f * x + dL_dnormal.y * 2.f * y;
+	const float dLcon_dr = dL_dnormal.x * 2.f * y - dL_dnormal.y * 2.f * x;
+	dL_dq.x += dLcon_dr;
+	dL_dq.y += dLcon_dx;
+	dL_dq.z += dLcon_dy;
+	dL_dq.w += dLcon_dz;
+
+	// Gradients of loss w.r.t. unnormalized quaternion
+	float4* dL_drot = (float4*)(dL_drots + idx);
+	*dL_drot = float4{ dL_dq.x, dL_dq.y, dL_dq.z, dL_dq.w};
+} 
+
+
 template<int C>
 __global__ void preprocessCUDA(
 	int P, int D, int M,
@@ -574,58 +721,51 @@ __global__ void preprocessCUDA(
 	const int W = int(focal_x * tan_fovx * 2);
 	const int H = int(focal_y * tan_fovy * 2);
 	const float* transMat = transMats + 9 * idx;
-	const float* dL_dnormal3D = dL_dnormal3Ds + 3 * idx;
-	float* dL_dtransMat = dL_dtransMats + 9 * idx;
-	glm::vec3 dL_dmean2D = glm::vec3(dL_dmean2Ds[idx].x, dL_dmean2Ds[idx].y, dL_dmean2Ds[idx].z);
-	
-	glm::mat3 dL_dT = glm::mat3(
-		dL_dtransMat[0], dL_dtransMat[1], dL_dtransMat[2],
-		dL_dtransMat[3], dL_dtransMat[4], dL_dtransMat[5],
-		dL_dtransMat[6], dL_dtransMat[7], dL_dtransMat[8]
-	);
+	const float3 * dL_dnormals = (float3*)dL_dnormal3Ds;
 
-	if (dL_dmean2D.x != 0 || dL_dmean2D.y != 0) {
-		// backpropagate low pass filter to dL_dT
-		computeAABB(transMat, dL_dmean2D, dL_dT);
+	const float3 p_world = { means3D[idx].x, means3D[idx].y, means3D[idx].z };
+	const float3 p_view = transformPoint4x3(p_world, viewmatrix);
+	glm::vec4 q = rotations[idx];
+	float r = q.x;
+	float x = q.y;
+	float y = q.z;
+	float z = q.w;
+	float3 zaxis = {2.f * (x * z + r * y), 
+					2.f * (y * z - r * x), 
+					1.f - 2.f * (x * x + y * y)};
+	float3 normal = transformVec4x3(zaxis, viewmatrix);
+	float dL_dnx = 0.f;
+	float dL_dny = 0.f;
+	float dL_dnz = 0.f;
+	if (sumf3(normal * p_view) > 0.f)
+	{
+		dL_dnx = -dL_dnormals[idx].x;
+		dL_dny = -dL_dnormals[idx].y;
+		dL_dnz = -dL_dnormals[idx].z;
+	}
+	else{
+		dL_dnx = dL_dnormals[idx].x;
+		dL_dny = dL_dnormals[idx].y;
+		dL_dnz = dL_dnormals[idx].z;
+	}
+
+	const float3 dL_dnormal = {
+		dL_dnx * viewmatrix[0] + dL_dny * viewmatrix[1] + dL_dnz * viewmatrix[2],
+		dL_dnx * viewmatrix[4] + dL_dny * viewmatrix[5] + dL_dnz * viewmatrix[6],
+		dL_dnx * viewmatrix[8] + dL_dny * viewmatrix[9] + dL_dnz * viewmatrix[10],
 	};
 
-	if (scales) {
-		// backpropagate dL_dT to dL_dmean3D, dL_dscale, dL_drot
-		glm::vec3 p_world = glm::vec3(means3D[idx].x, means3D[idx].y, means3D[idx].z);
-		computeTransMat(
-			p_world, 
-			rotations[idx], 
-			scales[idx], 
-			viewmatrix, 
-			projmatrix, 
-			W, H, 
-			dL_dnormal3D, 
-			dL_dT, 
-			dL_dmean3Ds[idx], 
-			dL_dscales[idx], 
-			dL_drots[idx]
-		);
-
-	} else {
-		// no need to further propagation, update dL_dtransMat
-		dL_dtransMat[0] = dL_dT[0].x;
-		dL_dtransMat[1] = dL_dT[0].y;
-		dL_dtransMat[2] = dL_dT[0].z;
-		dL_dtransMat[3] = dL_dT[1].x;
-		dL_dtransMat[4] = dL_dT[1].y;
-		dL_dtransMat[5] = dL_dT[1].z;
-		dL_dtransMat[6] = dL_dT[2].x;
-		dL_dtransMat[7] = dL_dT[2].y;
-		dL_dtransMat[8] = dL_dT[2].z;
-	}
+	compute_radii_center(idx, means3D[idx], scales[idx], rotations[idx], projmatrix, W, H, dL_dmean2Ds, dL_dnormal, dL_dmean3Ds, (float3*)(dL_dtransMats), dL_dscales, dL_drots);
 
 	if (shs)
 		computeColorFromSH(idx, D, M, (glm::vec3*)means3D, *campos, shs, clamped, (glm::vec3*)dL_dcolors, (glm::vec3*)dL_dmean3Ds, (glm::vec3*)dL_dshs);
 	
 	// hack the gradient here
-	float z = transMat[8];
-	dL_dmean2Ds[idx].x = dL_dT[0].z * z * 0.5 * float(W); // to ndc 
-	dL_dmean2Ds[idx].y = dL_dT[1].z * z * 0.5 * float(H); // to ndc
+	// dL_dmean2Ds[idx].x = 4.0f * dL_dmean3Ds[idx].x;
+	// dL_dmean2Ds[idx].y = 4.0f * dL_dmean3Ds[idx].y;
+	float depth = transMat[8];
+	dL_dmean2Ds[idx].x = dL_dtransMats[idx * 9 + 2] * depth * 0.5 * float(W); // to ndc 
+	dL_dmean2Ds[idx].y = dL_dtransMats[idx * 9 + 5] * depth * 0.5 * float(H); // to ndc
 }
 
 
