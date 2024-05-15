@@ -72,7 +72,7 @@ __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const 
 
 // Compute a 2D-to-2D mapping matrix from a tangent plane into a image plane
 // given a 2D gaussian parameters.
-__device__ void computeTransMat(const glm::vec3 &p_world, const glm::vec4 &quat, const glm::vec2 &scale, const float *viewmat, const float*projmat, const int W, const int H, float* transMat, float3 &normal) {
+__device__ void computeTransMat(const glm::vec3 &p_world, const glm::vec4 &quat, const glm::vec2 &scale, const float *viewmat, const float*projmat, const int W, const int H,  glm::mat3 &T, float3 &normal) {
 	// setup camera
 	// can be fatored out to reduce computations
 	glm::mat4 world2ndc = glm::mat4(
@@ -97,19 +97,9 @@ __device__ void computeTransMat(const glm::vec3 &p_world, const glm::vec4 &quat,
 		glm::vec4(RS[1], 0.0),
 		glm::vec4(p_world, 1.0)
 	);
+	
 	// projection into screen space, see Eq. (7) in 2DGS
-	glm::mat3 T = glm::transpose(splat2world) * P;
-
-	transMat[0] = T[0].x;
-	transMat[1] = T[0].y;
-	transMat[2] = T[0].z;
-	transMat[3] = T[1].x;
-	transMat[4] = T[1].y;
-	transMat[5] = T[1].z;
-	transMat[6] = T[2].x;
-	transMat[7] = T[2].y;
-	transMat[8] = T[2].z;
-
+	T = glm::transpose(splat2world) * P;
 	normal = transformVec4x3({RS[2].x, RS[2].y, RS[2].z}, viewmat);
 
 #if DUAL_VISIABLE
@@ -123,12 +113,12 @@ __device__ void computeTransMat(const glm::vec3 &p_world, const glm::vec4 &quat,
 // Computing the bounding box of the 2D Gaussian and its center,
 // where the center of the bounding box is used to create a low pass filter
 // in the image plane
-__device__ bool computeAABB(const float *transMat, float2 & center, float2 & extent) {
+__device__ bool computeAABB(const glm::mat3 & transMat, float2 & center, float2 & extent) {
 	glm::mat4x3 T = glm::mat4x3(
-		transMat[0], transMat[1], transMat[2],
-		transMat[3], transMat[4], transMat[5],
-		transMat[6], transMat[7], transMat[8],
-		transMat[6], transMat[7], transMat[8]
+		transMat[0],
+		transMat[1],
+		transMat[2],
+		transMat[2]
 	);
 
 	float d = glm::dot(glm::vec3(1.0, 1.0, -1.0), T[3] * T[3]);
@@ -198,23 +188,26 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, prefiltered, p_view))
 		return;
 	
-	const float* transMat;
+	// const float* transMat;
 	float3 normal;
+	glm::mat3 T;
 	if (transMat_precomp != nullptr)
 	{
-		transMat = transMat_precomp + idx * 9;
+		const float * transMat = transMat_precomp + idx * 9;
+		T = glm::mat3(
+			transMat[0],transMat[1],transMat[2],
+			transMat[3],transMat[4],transMat[5],
+			transMat[6],transMat[7],transMat[8]
+		); 
 		normal = {0.f, 0.f, 0.f}; // not support precomp normal
-	}
-	else
-	{
-		computeTransMat(p_world, rotations[idx], scales[idx], viewmatrix, projmatrix, W, H, transMats + idx * 9, normal);
-		transMat = transMats + idx * 9;
+	} else {
+		computeTransMat(p_world, rotations[idx], scales[idx], viewmatrix, projmatrix, W, H, T, normal);
 	}
 	
 	//  compute center and extent
 	float2 center;
 	float2 extent;
-	bool ok = computeAABB(transMat, center, extent);
+	bool ok = computeAABB(T, center, extent);
 	if (!ok) return;
 
 	// add the bounding of countour
@@ -222,7 +215,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	// the effective extent is now depended on the opacity of gaussian.
 	float truncated_R = sqrtf(max(9.f + 2.f * logf(opacities[idx]), 0.000001));
 #else
-	float truncated_R = 3.f;
+	float truncated_R = 2.f;
 #endif
 	float radius = ceil(truncated_R * max(max(extent.x, extent.y), FilterSize));
 
@@ -239,10 +232,24 @@ __global__ void preprocessCUDA(int P, int D, int M,
 		rgb[idx * C + 2] = result.z;
 	}
 
+	if (transMat_precomp != nullptr) {
+		// no need to write to the buffer
+	} else {
+		float * transMat = transMats + idx * 9;
+		transMat[0] = T[0].x;
+		transMat[1] = T[0].y;
+		transMat[2] = T[0].z;
+		transMat[3] = T[1].x;
+		transMat[4] = T[1].y;
+		transMat[5] = T[1].z;
+		transMat[6] = T[2].x;
+		transMat[7] = T[2].y;
+		transMat[8] = T[2].z;
+	}
+
 	depths[idx] = p_view.z;
 	radii[idx] = (int)radius;
 	points_xy_image[idx] = center;
-	// store them in float4
 	normal_opacity[idx] = {normal.x, normal.y, normal.z, opacities[idx]};
 	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
 }

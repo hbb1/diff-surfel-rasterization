@@ -456,33 +456,26 @@ inline __device__ void computeTransMat(
 	const float* projmat,
 	const int W,
 	const int H,
-	const float* transMat,
-	const float* dL_dtransMat,
 	const float* dL_dnormal3D,
+	const glm::mat3 & dL_dT,
 	glm::vec3 & dL_dmean3D,
 	glm::vec2 & dL_dscale,
 	glm::vec4 & dL_drot
 ) {
-	glm::mat4 world2ndc = glm::mat4(
+	const glm::mat4 world2ndc = glm::mat4(
 		projmat[0], projmat[4], projmat[8], projmat[12],
 		projmat[1], projmat[5], projmat[9], projmat[13],
 		projmat[2], projmat[6], projmat[10], projmat[14],
 		projmat[3], projmat[7], projmat[11], projmat[15]
 	);
 
-	glm::mat3x4 ndc2pix = glm::mat3x4(
+	const glm::mat3x4 ndc2pix = glm::mat3x4(
 		glm::vec4(float(W) / 2.0, 0.0, 0.0, float(W-1) / 2.0),
 		glm::vec4(0.0, float(H) / 2.0, 0.0, float(H-1) / 2.0),
 		glm::vec4(0.0, 0.0, 0.0, 1.0)
 	);
 
-	glm::mat3x4 P = world2ndc * ndc2pix;
-
-	glm::mat3 dL_dT = glm::mat3(
-		dL_dtransMat[0], dL_dtransMat[1], dL_dtransMat[2],
-		dL_dtransMat[3], dL_dtransMat[4], dL_dtransMat[5],
-		dL_dtransMat[6], dL_dtransMat[7], dL_dtransMat[8]
-	);
+	const glm::mat3x4 P = world2ndc * ndc2pix;
 
 	glm::mat3x4 dL_dsplat = P * glm::transpose(dL_dT);
 
@@ -512,9 +505,38 @@ inline __device__ void computeTransMat(
 	dL_drot = quat_to_rotmat_vjp(quat, dL_dR);
 	dL_dscale = glm::vec2(
 		(float)glm::dot(dL_dRS[0], R[0]),
-		(float)glm::dot(dL_dRS[1], R[1]));
+		(float)glm::dot(dL_dRS[1], R[1])
+	);
 }
 
+inline __device__ void computeAABB(
+	const float * transMat,
+	glm::vec3 & dL_dmean2D,
+	glm::mat3 & dL_dT) {
+
+	glm::mat4x3 T = glm::mat4x3(
+		transMat[0], transMat[1], transMat[2],
+		transMat[3], transMat[4], transMat[5],
+		transMat[6], transMat[7], transMat[8],
+		transMat[6], transMat[7], transMat[8]
+	);
+
+	float d = glm::dot(glm::vec3(1.0, 1.0, -1.0), T[3] * T[3]);
+	glm::vec3 f = glm::vec3(1.0, 1.0, -1.0) * (1.0f / d);
+
+	glm::vec3 p = glm::vec3(
+		glm::dot(f, T[0] * T[3]),
+		glm::dot(f, T[1] * T[3]), 
+		glm::dot(f, T[2] * T[3]));
+
+	dL_dT[0] += dL_dmean2D.x * f * T[3];
+	dL_dT[1] += dL_dmean2D.y * f * T[3];
+	dL_dT[2] += dL_dmean2D.x * f * T[0] + dL_dmean2D.y * f * T[1];
+	glm::vec3 dL_df = (dL_dmean2D.x * T[0] * T[3]) + (dL_dmean2D.y * T[1] * T[3]);
+	float dL_dd = glm::dot(dL_df, f) * (-1.0 / d);
+	glm::vec3 dd_dT3 = glm::vec3(1.0, 1.0, -1.0) * T[3] * 2.0f;
+	dL_dT[2] += dL_dd * dd_dT3;
+}
 
 
 template<int C>
@@ -536,11 +558,11 @@ __global__ void preprocessCUDA(
 	const float tan_fovy,
 	const glm::vec3* campos, 
 	// grad input
-	const float* dL_dtransMats,
+	float* dL_dtransMats,
 	const float* dL_dnormal3Ds,
 	float* dL_dcolors,
 	float* dL_dshs,
-	// grad output
+	float3* dL_dmean2Ds,
 	glm::vec3* dL_dmean3Ds,
 	glm::vec2* dL_dscales,
 	glm::vec4* dL_drots)
@@ -549,93 +571,61 @@ __global__ void preprocessCUDA(
 	if (idx >= P || !(radii[idx] > 0))
 		return;
 
+	const int W = int(focal_x * tan_fovx * 2);
+	const int H = int(focal_y * tan_fovy * 2);
+	const float* transMat = transMats + 9 * idx;
+	const float* dL_dnormal3D = dL_dnormal3Ds + 3 * idx;
+	float* dL_dtransMat = dL_dtransMats + 9 * idx;
+	glm::vec3 dL_dmean2D = glm::vec3(dL_dmean2Ds[idx].x, dL_dmean2Ds[idx].y, dL_dmean2Ds[idx].z);
+	
+	glm::mat3 dL_dT = glm::mat3(
+		dL_dtransMat[0], dL_dtransMat[1], dL_dtransMat[2],
+		dL_dtransMat[3], dL_dtransMat[4], dL_dtransMat[5],
+		dL_dtransMat[6], dL_dtransMat[7], dL_dtransMat[8]
+	);
+
+	if (dL_dmean2D.x != 0 || dL_dmean2D.y != 0) {
+		// backpropagate low pass filter to dL_dT
+		computeAABB(transMat, dL_dmean2D, dL_dT);
+	};
+
 	if (scales) {
-		const float* transMat = &(transMats[9 * idx]);
-		const float* dL_dtransMat = &(dL_dtransMats[9 * idx]);
-		const float* dL_dnormal3D = &(dL_dnormal3Ds[3 * idx]);
-
+		// backpropagate dL_dT to dL_dmean3D, dL_dscale, dL_drot
 		glm::vec3 p_world = glm::vec3(means3D[idx].x, means3D[idx].y, means3D[idx].z);
-
-		const int W = int(focal_x * tan_fovx * 2);
-		const int H = int(focal_y * tan_fovy * 2);
-		glm::vec3 dL_dmean3D;
-		glm::vec2 dL_dscale;
-		glm::vec4 dL_drot;
 		computeTransMat(
-			p_world,
-			rotations[idx],
-			scales[idx],
-			viewmatrix,
-			projmatrix,
-			W,
-			H,
-			transMat, 
-			dL_dtransMat,
-			dL_dnormal3D,
-			dL_dmean3D, 
-			dL_dscale,
-			dL_drot
+			p_world, 
+			rotations[idx], 
+			scales[idx], 
+			viewmatrix, 
+			projmatrix, 
+			W, H, 
+			dL_dnormal3D, 
+			dL_dT, 
+			dL_dmean3Ds[idx], 
+			dL_dscales[idx], 
+			dL_drots[idx]
 		);
-		// update 
-		dL_dmean3Ds[idx] = dL_dmean3D;
-		dL_dscales[idx] = dL_dscale;
-		dL_drots[idx] = dL_drot;
+
+	} else {
+		// no need to further propagation, update dL_dtransMat
+		dL_dtransMat[0] = dL_dT[0].x;
+		dL_dtransMat[1] = dL_dT[0].y;
+		dL_dtransMat[2] = dL_dT[0].z;
+		dL_dtransMat[3] = dL_dT[1].x;
+		dL_dtransMat[4] = dL_dT[1].y;
+		dL_dtransMat[5] = dL_dT[1].z;
+		dL_dtransMat[6] = dL_dT[2].x;
+		dL_dtransMat[7] = dL_dT[2].y;
+		dL_dtransMat[8] = dL_dT[2].z;
 	}
 
 	if (shs)
 		computeColorFromSH(idx, D, M, (glm::vec3*)means3D, *campos, shs, clamped, (glm::vec3*)dL_dcolors, (glm::vec3*)dL_dmean3Ds, (glm::vec3*)dL_dshs);
-}
-
-__global__ void computeAABB(int P, 
-	const int * radii,
-	const float W, const float H,
-	const float * transMats,
-	float3 * dL_dmean2Ds,
-	float *dL_dtransMats) {
 	
-	auto idx = cg::this_grid().thread_rank();
-	if (idx >= P || !(radii[idx] > 0))
-		return;
-	
-	const float* transMat = transMats + 9 * idx;
-
-	const float3 dL_dmean2D = dL_dmean2Ds[idx];
-	glm::mat4x3 T = glm::mat4x3(
-		transMat[0], transMat[1], transMat[2],
-		transMat[3], transMat[4], transMat[5],
-		transMat[6], transMat[7], transMat[8],
-		transMat[6], transMat[7], transMat[8]
-	);
-
-	float d = glm::dot(glm::vec3(1.0, 1.0, -1.0), T[3] * T[3]);
-	glm::vec3 f = glm::vec3(1.0, 1.0, -1.0) * (1.0f / d);
-
-	glm::vec3 p = glm::vec3(
-		glm::dot(f, T[0] * T[3]),
-		glm::dot(f, T[1] * T[3]), 
-		glm::dot(f, T[2] * T[3]));
-
-	glm::vec3 dL_dT0 = dL_dmean2D.x * f * T[3];
-	glm::vec3 dL_dT1 = dL_dmean2D.y * f * T[3];
-	glm::vec3 dL_dT3 = dL_dmean2D.x * f * T[0] + dL_dmean2D.y * f * T[1];
-	glm::vec3 dL_df = (dL_dmean2D.x * T[0] * T[3]) + (dL_dmean2D.y * T[1] * T[3]);
-	float dL_dd = glm::dot(dL_df, f) * (-1.0 / d);
-	glm::vec3 dd_dT3 = glm::vec3(1.0, 1.0, -1.0) * T[3] * 2.0f;
-	dL_dT3 += dL_dd * dd_dT3;
-	dL_dtransMats[9 * idx + 0] += dL_dT0.x;
-	dL_dtransMats[9 * idx + 1] += dL_dT0.y;
-	dL_dtransMats[9 * idx + 2] += dL_dT0.z;
-	dL_dtransMats[9 * idx + 3] += dL_dT1.x;
-	dL_dtransMats[9 * idx + 4] += dL_dT1.y;
-	dL_dtransMats[9 * idx + 5] += dL_dT1.z;
-	dL_dtransMats[9 * idx + 6] += dL_dT3.x;
-	dL_dtransMats[9 * idx + 7] += dL_dT3.y;
-	dL_dtransMats[9 * idx + 8] += dL_dT3.z;
-
-	// just use to hack the projected 2D gradient here.
+	// hack the gradient here
 	float z = transMat[8];
-	dL_dmean2Ds[idx].x = dL_dtransMats[9 * idx + 2] * z * W; // to ndc 
-	dL_dmean2Ds[idx].y = dL_dtransMats[9 * idx + 5] * z * H; // to ndc
+	dL_dmean2Ds[idx].x = dL_dT[0].z * z * 0.5 * float(W); // to ndc 
+	dL_dmean2Ds[idx].y = dL_dT[1].z * z * 0.5 * float(H); // to ndc
 }
 
 
@@ -670,15 +660,15 @@ void BACKWARD::preprocess(
 	// propagate gradients to transMat
 
 	// we do not use the center actually
-	float W = focal_x * tan_fovx;
-	float H = focal_y * tan_fovy;
-	computeAABB << <(P + 255) / 256, 256 >> >(
-		P,
-		radii,
-		W, H,
-		transMats,
-		dL_dmean2Ds,
-		dL_dtransMats);
+	// int W = focal_x * tan_fovx * 2;
+	// int H = focal_y * tan_fovy * 2;
+	// computeAABB << <(P + 255) / 256, 256 >> >(
+	// 	P,
+	// 	radii,
+	// 	W, H,
+	// 	transMats,
+	// 	dL_dmean2Ds,
+	// 	dL_dtransMats);
 	
 	// propagate gradients from transMat to mean3d, scale, rot, sh, color
 	preprocessCUDA<NUM_CHANNELS><< <(P + 255) / 256, 256 >> > (
@@ -702,6 +692,7 @@ void BACKWARD::preprocess(
 		dL_dnormal3Ds,
 		dL_dcolors,
 		dL_dshs,
+		dL_dmean2Ds,
 		dL_dmean3Ds,
 		dL_dscales,
 		dL_drots
