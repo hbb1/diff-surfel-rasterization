@@ -145,20 +145,21 @@ __device__ bool computeAABB(const glm::mat3 & transMat, float2 & center, float2 
 	return true;
 }
 
-__device__ glm::mat3 compute_radii_center(
+__device__ void compute_radii_center(
 	const float3& p_orig,
 	const glm::vec2 scale,
 	const glm::vec4 rot,
 	const float* projmatrix,
+	const float* viewmatrix,
 	const int W,
 	const int H, 
-	float3 &zaxis
+	glm::mat3 &T,
+	float3 &normal
 ) {
 
 	glm::mat3 R = quat_to_rotmat(rot);
 	glm::mat3 S = scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
 	glm::mat3 L = R * S;
-	zaxis = {L[2].x, L[2].y, L[2].z};
 
 	// center of Gaussians in the camera coordinate
 	glm::mat3x4 splat2world = glm::mat3x4(
@@ -180,8 +181,13 @@ __device__ glm::mat3 compute_radii_center(
 		glm::vec4(0.0, 0.0, 0.0, 1.0)
 	);
 
-	glm::mat3 T = glm::transpose(splat2world) * world2ndc * ndc2pix;
-	return T;
+	T = glm::transpose(splat2world) * world2ndc * ndc2pix;
+	normal = transformVec4x3({L[2].x, L[2].y, L[2].z}, viewmatrix);
+
+#if DUAL_VISIABLE
+	float multiplier = normal.z < 0 ? 1: -1;
+	normal = multiplier * normal;
+#endif
 }
 
 __device__ bool compute_aabb(
@@ -256,30 +262,16 @@ __global__ void preprocessCUDA(int P, int D, int M,
 		return;
 	
 	// compute transformation matrix
-	float3 *T_ptr = (float3*)transMats;
 	glm::mat3 T;
 	float3 normal;
 	{
-		float3 zaxis;
-		float3 p_world = { orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2] };
-		T = compute_radii_center(p_world, scales[idx], rotations[idx], projmatrix, W, H, zaxis);
+		compute_radii_center(((float3*)orig_points)[idx], scales[idx], rotations[idx], projmatrix, viewmatrix, W, H, T, normal);
+		float3 *T_ptr = (float3*)transMats;
 		T_ptr[idx * 3 + 0] = {T[0][0], T[0][1], T[0][2]};
 		T_ptr[idx * 3 + 1] = {T[1][0], T[1][1], T[1][2]};
 		T_ptr[idx * 3 + 2] = {T[2][0], T[2][1], T[2][2]};
-		normal = transformVec4x3(zaxis, viewmatrix);
-		if (sumf3(normal * p_view) > 0.f)
-			normal = {-normal.x, -normal.y, -normal.z};
 	}
-
-// add the bounding of countour
-// #if TIGHTBBOX // no use in the paper, but it indeed help speeds.
-// 	// the effective extent is now depended on the opacity of gaussian.
-// 	float truncated_R = sqrtf(max(9.f + 2.f * logf(opacities[idx]), 0.000001));
-// #else
-// 	float truncated_R = 2.f;
-// #endif
-// 	float radius = ceil(truncated_R * max(max(extent.x, extent.y), FilterSize));
-
+	
 	// compute center and radius
 	float2 point_image;
 	float radius;
