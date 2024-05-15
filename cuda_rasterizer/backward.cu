@@ -294,7 +294,7 @@ renderCUDA(
 			float2 s = {p.x / p.z, p.y / p.z};
 			float rho3d = (s.x * s.x + s.y * s.y); 
 			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
-			float rho2d = 2.0 * (d.x * d.x + d.y * d.y); 
+			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); 
 
 			// compute intersection and depth
 			float rho = min(rho3d, rho2d);

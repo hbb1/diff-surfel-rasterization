@@ -18,7 +18,7 @@
 #define BLOCK_SIZE (BLOCK_X * BLOCK_Y)
 #define NUM_WARPS (BLOCK_SIZE/32)
 #define FilterSize 0.7071067811865476
-#define FilterInvSquare 1/(FilterSize*FilterSize)
+#define FilterInvSquare 2.0
 
 #define TIGHTBBOX 0
 #define RENDER_AXUTILITY 1
