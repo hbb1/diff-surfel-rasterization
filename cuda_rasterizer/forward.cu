@@ -379,7 +379,7 @@ renderCUDA(
 			float w = alpha * T;
 #if RENDER_AXUTILITY
 			// Render depth distortion map
-			// render depth
+			// Efficient implementation of distortion loss, see 2DGS' paper appendix.
 			float A = 1-T;
 			float m = far_n / (far_n - near_n) * (1 - near_n / depth);
 			distortion += (m * m * A + M2 - 2 * m * M1) * w;
@@ -398,7 +398,7 @@ renderCUDA(
 
 			// Eq. (3) from 3D Gaussian splatting paper.
 			for (int ch = 0; ch < CHANNELS; ch++)
-				C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
+				C[ch] += features[collected_id[j] * CHANNELS + ch] * w;
 			T = test_T;
 
 			// Keep track of last range entry to update this

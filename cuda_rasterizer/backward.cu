@@ -339,7 +339,7 @@ renderCUDA(
 			float dL_dz = 0.0f;
 			float dL_dweight = 0;
 #if RENDER_AXUTILITY
-			const float m_d = (far_n * c_d - near_n * near_n) / ((far_n - near_n) * c_d);
+			const float m_d = far_n / (far_n - near_n) * (1 - near_n / c_d);
 			const float dmd_dd = (far_n * near_n) / ((far_n - near_n) * c_d * c_d);
 			if (contributor == median_contributor-1) {
 				dL_dz += dL_dmedian_depth;
