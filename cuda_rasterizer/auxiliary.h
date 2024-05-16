@@ -17,7 +17,6 @@
 
 #define BLOCK_SIZE (BLOCK_X * BLOCK_Y)
 #define NUM_WARPS (BLOCK_SIZE/32)
-#define FilterInvSquare 2.0
 
 #define TIGHTBBOX 0
 #define RENDER_AXUTILITY 1
@@ -37,6 +36,7 @@
 
 __device__ const float near_n = 0.2;
 __device__ const float far_n = 100.0;
+__device__ const float FilterInvSquare = 2.0f;
 
 // Spherical harmonics coefficients
 __device__ const float SH_C0 = 0.28209479177387814f;
@@ -180,15 +180,6 @@ __forceinline__ __device__ float2 minf2(float f, float2 a){return make_float2(mi
 __forceinline__ __device__ float3 maxf3(float f, float3 a){return make_float3(max(f, a.x), max(f, a.y), max(f, a.z));}
 
 __forceinline__ __device__ float2 maxf2(float f, float2 a){return make_float2(max(f, a.x), max(f, a.y));}
-
-
-__forceinline__ __device__ float3 crossProduct(float3 a, float3 b) {
-	float3 result;
-	result.x = a.y * b.z - a.z * b.y;
-    result.y = a.z * b.x - a.x * b.z;
-    result.z = a.x * b.y - a.y * b.x;
-    return result;
-}
 
 __forceinline__ __device__ bool in_frustum(int idx,
 	const float* orig_points,
