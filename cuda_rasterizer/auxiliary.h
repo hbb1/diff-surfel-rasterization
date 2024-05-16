@@ -17,7 +17,6 @@
 
 #define BLOCK_SIZE (BLOCK_X * BLOCK_Y)
 #define NUM_WARPS (BLOCK_SIZE/32)
-#define FilterSize 0.7071067811865476
 #define FilterInvSquare 2.0
 
 #define TIGHTBBOX 0
@@ -27,14 +26,17 @@
 #define NORMAL_OFFSET 2 
 #define MIDDEPTH_OFFSET 5
 #define DISTORTION_OFFSET 6
-#define MEDIAN_WEIGHT_OFFSET 7
+// #define MEDIAN_WEIGHT_OFFSET 7
 
 // distortion helper macros
 #define BACKFACE_CULL 1
 #define DUAL_VISIABLE 1
-#define NEAR_PLANE 0.2
-#define FAR_PLANE 100.0
+// #define NEAR_PLANE 0.2
+// #define FAR_PLANE 100.0
 #define DETACH_WEIGHT 0
+
+__device__ const float near_n = 0.2;
+__device__ const float far_n = 100.0;
 
 // Spherical harmonics coefficients
 __device__ const float SH_C0 = 0.28209479177387814f;
@@ -289,11 +291,11 @@ quat_to_rotmat_vjp(const glm::vec4 quat, const glm::mat3 v_R) {
 
 
 inline __device__ glm::mat3
-scale_to_mat(const float3 scale, const float glob_scale) {
+scale_to_mat(const glm::vec2 scale, const float glob_scale) {
 	glm::mat3 S = glm::mat3(1.f);
 	S[0][0] = glob_scale * scale.x;
 	S[1][1] = glob_scale * scale.y;
-	S[2][2] = glob_scale * scale.z;
+	// S[2][2] = glob_scale * scale.z;
 	return S;
 }
 

@@ -72,80 +72,7 @@ __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const 
 
 // Compute a 2D-to-2D mapping matrix from a tangent plane into a image plane
 // given a 2D gaussian parameters.
-__device__ void computeTransMat(const glm::vec3 &p_world, const glm::vec4 &quat, const glm::vec2 &scale, const float *viewmat, const float*projmat, const int W, const int H,  glm::mat3 &T, float3 &normal) {
-	// setup camera
-	// can be fatored out to reduce computations
-	glm::mat4 world2ndc = glm::mat4(
-		projmat[0], projmat[4], projmat[8], projmat[12],
-		projmat[1], projmat[5], projmat[9], projmat[13],
-		projmat[2], projmat[6], projmat[10], projmat[14],
-		projmat[3], projmat[7], projmat[11], projmat[15]
-	);
-
-	glm::mat3x4 ndc2pix = glm::mat3x4(
-		glm::vec4(float(W) / 2.0, 0.0, 0.0, float(W-1) / 2.0),
-		glm::vec4(0.0, float(H) / 2.0, 0.0, float(H-1) / 2.0),
-		glm::vec4(0.0, 0.0, 0.0, 1.0)
-	);
-
-	glm::mat3x4 P = world2ndc * ndc2pix;
-	// Make the geometry of 2D Gaussian as a Homogeneous transformation matrix 
-	// under the camera view, See Eq. (5) in 2DGS' paper.
-	glm::mat3 RS = quat_to_rotmat(quat) * scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
-	glm::mat3x4 splat2world = glm::mat3x4(
-		glm::vec4(RS[0], 0.0),
-		glm::vec4(RS[1], 0.0),
-		glm::vec4(p_world, 1.0)
-	);
-	
-	// projection into screen space, see Eq. (7) in 2DGS
-	T = glm::transpose(splat2world) * P;
-	normal = transformVec4x3({RS[2].x, RS[2].y, RS[2].z}, viewmat);
-
-#if DUAL_VISIABLE
-	// This means a 2D Gaussian is dual visiable.
-	// Experimentally, turning off the dual visiable works eqully.
-	float multiplier = normal.z < 0 ? 1: -1;
-	normal = {multiplier * normal.x, multiplier * normal.y, multiplier * normal.z};
-#endif
-}
-
-// Computing the bounding box of the 2D Gaussian and its center,
-// where the center of the bounding box is used to create a low pass filter
-// in the image plane
-__device__ bool computeAABB(const glm::mat3 & transMat, float2 & center, float2 & extent) {
-	glm::mat4x3 T = glm::mat4x3(
-		transMat[0],
-		transMat[1],
-		transMat[2],
-		transMat[2]
-	);
-
-	float d = glm::dot(glm::vec3(1.0, 1.0, -1.0), T[3] * T[3]);
-	
-	if (d == 0.0f) return false;
-
-	glm::vec3 f = glm::vec3(1.0, 1.0, -1.0) * (1.0f / d);
-
-	glm::vec3 p = glm::vec3(
-		glm::dot(f, T[0] * T[3]),
-		glm::dot(f, T[1] * T[3]), 
-		glm::dot(f, T[2] * T[3]));
-	
-	glm::vec3 h0 = p * p - 
-		glm::vec3(
-			glm::dot(f, T[0] * T[0]),
-			glm::dot(f, T[1] * T[1]), 
-			glm::dot(f, T[2] * T[2])
-		);
-
-	glm::vec3 h = sqrt(max(glm::vec3(0.0), h0)) + glm::vec3(0.0, 0.0, 1e-2);
-	center = {p.x, p.y};
-	extent = {h.x, h.y};
-	return true;
-}
-
-__device__ void compute_radii_center(
+__device__ void compute_transmat(
 	const float3& p_orig,
 	const glm::vec2 scale,
 	const glm::vec4 rot,
@@ -158,7 +85,7 @@ __device__ void compute_radii_center(
 ) {
 
 	glm::mat3 R = quat_to_rotmat(rot);
-	glm::mat3 S = scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
+	glm::mat3 S = scale_to_mat(scale, 1.0f);
 	glm::mat3 L = R * S;
 
 	// center of Gaussians in the camera coordinate
@@ -190,6 +117,8 @@ __device__ void compute_radii_center(
 #endif
 }
 
+// Computing the bounding box of the 2D Gaussian and its center
+// The center of the bounding box is used to create a low pass filter
 __device__ bool compute_aabb(
 	glm::mat3 T, 
 	float2& point_image,
@@ -261,18 +190,27 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, prefiltered, p_view))
 		return;
 	
-	// compute transformation matrix
+	// Compute transformation matrix
 	glm::mat3 T;
 	float3 normal;
+	if (transMat_precomp == nullptr)
 	{
-		compute_radii_center(((float3*)orig_points)[idx], scales[idx], rotations[idx], projmatrix, viewmatrix, W, H, T, normal);
+		compute_transmat(((float3*)orig_points)[idx], scales[idx], rotations[idx], projmatrix, viewmatrix, W, H, T, normal);
 		float3 *T_ptr = (float3*)transMats;
 		T_ptr[idx * 3 + 0] = {T[0][0], T[0][1], T[0][2]};
 		T_ptr[idx * 3 + 1] = {T[1][0], T[1][1], T[1][2]};
 		T_ptr[idx * 3 + 2] = {T[2][0], T[2][1], T[2][2]};
+	} else {
+		glm::vec3 *T_ptr = (glm::vec3*)transMat_precomp;
+		T = glm::mat3(
+			T_ptr[idx * 3 + 0], 
+			T_ptr[idx * 3 + 1],
+			T_ptr[idx * 3 + 2]
+		);
+		normal = make_float3(0.0, 0.0, 1.0);
 	}
-	
-	// compute center and radius
+
+	// Compute center and radius
 	float2 point_image;
 	float radius;
 	{
@@ -287,7 +225,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	if ((rect_max.x - rect_min.x) * (rect_max.y - rect_min.y) == 0)
 		return;
 
-	// compute colors 
+	// Compute colors 
 	if (colors_precomp == nullptr) {
 		glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
 		rgb[idx * C + 0] = result.x;
@@ -359,8 +297,6 @@ renderCUDA(
 
 #if RENDER_AXUTILITY
 	// render axutility ouput
-	const float far_n = FAR_PLANE;
-	const float near_n = NEAR_PLANE;
 	float N[3] = {0};
 	float D = { 0 };
 	float M1 = {0};
@@ -417,7 +353,7 @@ renderCUDA(
 			// compute intersection and depth
 			float rho = min(rho3d, rho2d);
 			float depth = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z; 
-			if (depth < NEAR_PLANE) continue;
+			if (depth < near_n) continue;
 			float4 nor_o = collected_normal_opacity[j];
 			float normal[3] = {nor_o.x, nor_o.y, nor_o.z};
 			float opa = nor_o.w;
