@@ -17,8 +17,6 @@
 
 #define BLOCK_SIZE (BLOCK_X * BLOCK_Y)
 #define NUM_WARPS (BLOCK_SIZE/32)
-#define FilterSize 0.7071067811865476
-#define FilterInvSquare 1/(FilterSize*FilterSize)
 
 #define TIGHTBBOX 0
 #define RENDER_AXUTILITY 1
@@ -27,14 +25,18 @@
 #define NORMAL_OFFSET 2 
 #define MIDDEPTH_OFFSET 5
 #define DISTORTION_OFFSET 6
-#define MEDIAN_WEIGHT_OFFSET 7
+// #define MEDIAN_WEIGHT_OFFSET 7
 
 // distortion helper macros
 #define BACKFACE_CULL 1
 #define DUAL_VISIABLE 1
-#define NEAR_PLANE 0.2
-#define FAR_PLANE 100.0
+// #define NEAR_PLANE 0.2
+// #define FAR_PLANE 100.0
 #define DETACH_WEIGHT 0
+
+__device__ const float near_n = 0.2;
+__device__ const float far_n = 100.0;
+__device__ const float FilterInvSquare = 2.0f;
 
 // Spherical harmonics coefficients
 __device__ const float SH_C0 = 0.28209479177387814f;
@@ -149,13 +151,35 @@ __forceinline__ __device__ float4 dnormvdv(float4 v, float4 dv)
 	return dnormvdv;
 }
 
-__forceinline__ __device__ float3 crossProduct(float3 a, float3 b) {
-	float3 result;
-	result.x = a.y * b.z - a.z * b.y;
-    result.y = a.z * b.x - a.x * b.z;
-    result.z = a.x * b.y - a.y * b.x;
-    return result;
-}
+__forceinline__ __device__ float3 cross(float3 a, float3 b){return make_float3(a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x);}
+
+__forceinline__ __device__ float3 operator*(float3 a, float3 b){return make_float3(a.x * b.x, a.y * b.y, a.z*b.z);}
+
+__forceinline__ __device__ float2 operator*(float2 a, float2 b){return make_float2(a.x * b.x, a.y * b.y);}
+
+__forceinline__ __device__ float3 operator*(float f, float3 a){return make_float3(f * a.x, f * a.y, f * a.z);}
+
+__forceinline__ __device__ float2 operator*(float f, float2 a){return make_float2(f * a.x, f * a.y);}
+
+__forceinline__ __device__ float3 operator-(float3 a, float3 b){return make_float3(a.x - b.x, a.y - b.y, a.z - b.z);}
+
+__forceinline__ __device__ float2 operator-(float2 a, float2 b){return make_float2(a.x - b.x, a.y - b.y);}
+
+__forceinline__ __device__ float sumf3(float3 a){return a.x + a.y + a.z;}
+
+__forceinline__ __device__ float sumf2(float2 a){return a.x + a.y;}
+
+__forceinline__ __device__ float3 sqrtf3(float3 a){return make_float3(sqrtf(a.x), sqrtf(a.y), sqrtf(a.z));}
+
+__forceinline__ __device__ float2 sqrtf2(float2 a){return make_float2(sqrtf(a.x), sqrtf(a.y));}
+
+__forceinline__ __device__ float3 minf3(float f, float3 a){return make_float3(min(f, a.x), min(f, a.y), min(f, a.z));}
+
+__forceinline__ __device__ float2 minf2(float f, float2 a){return make_float2(min(f, a.x), min(f, a.y));}
+
+__forceinline__ __device__ float3 maxf3(float f, float3 a){return make_float3(max(f, a.x), max(f, a.y), max(f, a.z));}
+
+__forceinline__ __device__ float2 maxf2(float f, float2 a){return make_float2(max(f, a.x), max(f, a.y));}
 
 __forceinline__ __device__ bool in_frustum(int idx,
 	const float* orig_points,
@@ -258,11 +282,11 @@ quat_to_rotmat_vjp(const glm::vec4 quat, const glm::mat3 v_R) {
 
 
 inline __device__ glm::mat3
-scale_to_mat(const float3 scale, const float glob_scale) {
+scale_to_mat(const glm::vec2 scale, const float glob_scale) {
 	glm::mat3 S = glm::mat3(1.f);
 	S[0][0] = glob_scale * scale.x;
 	S[1][1] = glob_scale * scale.y;
-	S[2][2] = glob_scale * scale.z;
+	// S[2][2] = glob_scale * scale.z;
 	return S;
 }
 

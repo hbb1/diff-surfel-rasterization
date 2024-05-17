@@ -72,14 +72,34 @@ __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const 
 
 // Compute a 2D-to-2D mapping matrix from a tangent plane into a image plane
 // given a 2D gaussian parameters.
-__device__ void computeTransMat(const glm::vec3 &p_world, const glm::vec4 &quat, const glm::vec2 &scale, const float *viewmat, const float*projmat, const int W, const int H, float* transMat, float3 &normal) {
-	// setup camera
-	// can be fatored out to reduce computations
+__device__ void compute_transmat(
+	const float3& p_orig,
+	const glm::vec2 scale,
+	const glm::vec4 rot,
+	const float* projmatrix,
+	const float* viewmatrix,
+	const int W,
+	const int H, 
+	glm::mat3 &T,
+	float3 &normal
+) {
+
+	glm::mat3 R = quat_to_rotmat(rot);
+	glm::mat3 S = scale_to_mat(scale, 1.0f);
+	glm::mat3 L = R * S;
+
+	// center of Gaussians in the camera coordinate
+	glm::mat3x4 splat2world = glm::mat3x4(
+		glm::vec4(L[0], 0.0),
+		glm::vec4(L[1], 0.0),
+		glm::vec4(p_orig.x, p_orig.y, p_orig.z, 1)
+	);
+
 	glm::mat4 world2ndc = glm::mat4(
-		projmat[0], projmat[4], projmat[8], projmat[12],
-		projmat[1], projmat[5], projmat[9], projmat[13],
-		projmat[2], projmat[6], projmat[10], projmat[14],
-		projmat[3], projmat[7], projmat[11], projmat[15]
+		projmatrix[0], projmatrix[4], projmatrix[8], projmatrix[12],
+		projmatrix[1], projmatrix[5], projmatrix[9], projmatrix[13],
+		projmatrix[2], projmatrix[6], projmatrix[10], projmatrix[14],
+		projmatrix[3], projmatrix[7], projmatrix[11], projmatrix[15]
 	);
 
 	glm::mat3x4 ndc2pix = glm::mat3x4(
@@ -88,70 +108,43 @@ __device__ void computeTransMat(const glm::vec3 &p_world, const glm::vec4 &quat,
 		glm::vec4(0.0, 0.0, 0.0, 1.0)
 	);
 
-	glm::mat3x4 P = world2ndc * ndc2pix;
-	// Make the geometry of 2D Gaussian as a Homogeneous transformation matrix 
-	// under the camera view, See Eq. (5) in 2DGS' paper.
-	glm::mat3 RS = quat_to_rotmat(quat) * scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
-	glm::mat3x4 splat2world = glm::mat3x4(
-		glm::vec4(RS[0], 0.0),
-		glm::vec4(RS[1], 0.0),
-		glm::vec4(p_world, 1.0)
-	);
-	// projection into screen space, see Eq. (7) in 2DGS
-	glm::mat3 T = glm::transpose(splat2world) * P;
-
-	transMat[0] = T[0].x;
-	transMat[1] = T[0].y;
-	transMat[2] = T[0].z;
-	transMat[3] = T[1].x;
-	transMat[4] = T[1].y;
-	transMat[5] = T[1].z;
-	transMat[6] = T[2].x;
-	transMat[7] = T[2].y;
-	transMat[8] = T[2].z;
-
-	normal = transformVec4x3({RS[2].x, RS[2].y, RS[2].z}, viewmat);
+	T = glm::transpose(splat2world) * world2ndc * ndc2pix;
+	normal = transformVec4x3({L[2].x, L[2].y, L[2].z}, viewmatrix);
 
 #if DUAL_VISIABLE
-	// This means a 2D Gaussian is dual visiable.
-	// Experimentally, turning off the dual visiable works eqully.
 	float multiplier = normal.z < 0 ? 1: -1;
-	normal = {multiplier * normal.x, multiplier * normal.y, multiplier * normal.z};
+	normal = multiplier * normal;
 #endif
 }
 
-// Computing the bounding box of the 2D Gaussian and its center,
-// where the center of the bounding box is used to create a low pass filter
-// in the image plane
-__device__ bool computeAABB(const float *transMat, float2 & center, float2 & extent) {
-	glm::mat4x3 T = glm::mat4x3(
-		transMat[0], transMat[1], transMat[2],
-		transMat[3], transMat[4], transMat[5],
-		transMat[6], transMat[7], transMat[8],
-		transMat[6], transMat[7], transMat[8]
-	);
+// Computing the bounding box of the 2D Gaussian and its center
+// The center of the bounding box is used to create a low pass filter
+__device__ bool compute_aabb(
+	glm::mat3 T, 
+	float2& point_image,
+	float2 & extent
+) {
+	float3 T0 = {T[0][0], T[0][1], T[0][2]};
+	float3 T1 = {T[1][0], T[1][1], T[1][2]};
+	float3 T3 = {T[2][0], T[2][1], T[2][2]};
 
-	float d = glm::dot(glm::vec3(1.0, 1.0, -1.0), T[3] * T[3]);
+	// Compute AABB
+	float3 temp_point = {1.0f, 1.0f, -1.0f};
+	float distance = sumf3(T3 * T3 * temp_point);
+	float3 f = (1 / distance) * temp_point;
+	if (distance == 0.0) return false;
+
+	point_image = {
+		sumf3(f * T0 * T3),
+		sumf3(f * T1 * T3)
+	};  
 	
-	if (d == 0.0f) return false;
-
-	glm::vec3 f = glm::vec3(1.0, 1.0, -1.0) * (1.0f / d);
-
-	glm::vec3 p = glm::vec3(
-		glm::dot(f, T[0] * T[3]),
-		glm::dot(f, T[1] * T[3]), 
-		glm::dot(f, T[2] * T[3]));
-	
-	glm::vec3 h0 = p * p - 
-		glm::vec3(
-			glm::dot(f, T[0] * T[0]),
-			glm::dot(f, T[1] * T[1]), 
-			glm::dot(f, T[2] * T[2])
-		);
-
-	glm::vec3 h = sqrt(max(glm::vec3(0.0), h0)) + glm::vec3(0.0, 0.0, 1e-2);
-	center = {p.x, p.y};
-	extent = {h.x, h.y};
+	float2 temp = {
+		sumf3(f * T0 * T0),
+		sumf3(f * T1 * T1)
+	};
+	float2 half_extend = point_image * point_image - temp;
+	extent = sqrtf2(maxf2(1e-4, half_extend));
 	return true;
 }
 
@@ -192,46 +185,47 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	radii[idx] = 0;
 	tiles_touched[idx] = 0;
 
-	glm::vec3 p_world = glm::vec3(orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2]);
 	// Perform near culling, quit if outside.
 	float3 p_view;
 	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, prefiltered, p_view))
 		return;
 	
-	const float* transMat;
+	// Compute transformation matrix
+	glm::mat3 T;
 	float3 normal;
-	if (transMat_precomp != nullptr)
+	if (transMat_precomp == nullptr)
 	{
-		transMat = transMat_precomp + idx * 9;
-		normal = {0.f, 0.f, 0.f}; // not support precomp normal
+		compute_transmat(((float3*)orig_points)[idx], scales[idx], rotations[idx], projmatrix, viewmatrix, W, H, T, normal);
+		float3 *T_ptr = (float3*)transMats;
+		T_ptr[idx * 3 + 0] = {T[0][0], T[0][1], T[0][2]};
+		T_ptr[idx * 3 + 1] = {T[1][0], T[1][1], T[1][2]};
+		T_ptr[idx * 3 + 2] = {T[2][0], T[2][1], T[2][2]};
+	} else {
+		glm::vec3 *T_ptr = (glm::vec3*)transMat_precomp;
+		T = glm::mat3(
+			T_ptr[idx * 3 + 0], 
+			T_ptr[idx * 3 + 1],
+			T_ptr[idx * 3 + 2]
+		);
+		normal = make_float3(0.0, 0.0, 1.0);
 	}
-	else
-	{
-		computeTransMat(p_world, rotations[idx], scales[idx], viewmatrix, projmatrix, W, H, transMats + idx * 9, normal);
-		transMat = transMats + idx * 9;
-	}
-	
-	//  compute center and extent
-	float2 center;
-	float2 extent;
-	bool ok = computeAABB(transMat, center, extent);
-	if (!ok) return;
 
-	// add the bounding of countour
-#if TIGHTBBOX // no use in the paper, but it indeed help speeds.
-	// the effective extent is now depended on the opacity of gaussian.
-	float truncated_R = sqrtf(max(9.f + 2.f * logf(opacities[idx]), 0.000001));
-#else
-	float truncated_R = 3.f;
-#endif
-	float radius = ceil(truncated_R * max(max(extent.x, extent.y), FilterSize));
+	// Compute center and radius
+	float2 point_image;
+	float radius;
+	{
+		float2 extent;
+		bool ok = compute_aabb(T, point_image, extent);
+		if (!ok) return;
+		radius = 3.0f * ceil(max(extent.x, extent.y));
+	}
 
 	uint2 rect_min, rect_max;
-	getRect(center, radius, rect_min, rect_max, grid);
+	getRect(point_image, radius, rect_min, rect_max, grid);
 	if ((rect_max.x - rect_min.x) * (rect_max.y - rect_min.y) == 0)
 		return;
 
-	// compute colors 
+	// Compute colors 
 	if (colors_precomp == nullptr) {
 		glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
 		rgb[idx * C + 0] = result.x;
@@ -241,8 +235,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 
 	depths[idx] = p_view.z;
 	radii[idx] = (int)radius;
-	points_xy_image[idx] = center;
-	// store them in float4
+	points_xy_image[idx] = point_image;
 	normal_opacity[idx] = {normal.x, normal.y, normal.z, opacities[idx]};
 	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
 }
@@ -304,13 +297,13 @@ renderCUDA(
 
 #if RENDER_AXUTILITY
 	// render axutility ouput
-	float D = { 0 };
 	float N[3] = {0};
-	float dist1 = {0};
-	float dist2 = {0};
+	float D = { 0 };
+	float M1 = {0};
+	float M2 = {0};
 	float distortion = {0};
 	float median_depth = {0};
-	float median_weight = {0};
+	// float median_weight = {0};
 	float median_contributor = {-1};
 
 #endif
@@ -344,37 +337,28 @@ renderCUDA(
 			contributor++;
 
 			// Fisrt compute two homogeneous planes, See Eq. (8)
-			float3 Tu = collected_Tu[j];
-			float3 Tv = collected_Tv[j];
-			float3 Tw = collected_Tw[j];
-			float3 k = {-Tu.x + pixf.x * Tw.x, -Tu.y + pixf.x * Tw.y, -Tu.z + pixf.x * Tw.z};
-			float3 l = {-Tv.x + pixf.y * Tw.x, -Tv.y + pixf.y * Tw.y, -Tv.z + pixf.y * Tw.z};
-			// cross product of two planes is a line (i.e., homogeneous point), See Eq. (10)
-			float3 p = crossProduct(k, l);
-#if BACKFACE_CULL
-			// May hanle this by replacing a low pass filter,
-			// but this case is extremely rare.
-			if (p.z == 0.0) continue; // there is not intersection
-#endif
-			// 3d homogeneous point to 2d point on the splat
+			const float2 xy = collected_xy[j];
+			const float3 Tu = collected_Tu[j];
+			const float3 Tv = collected_Tv[j];
+			const float3 Tw = collected_Tw[j];
+			float3 k = pix.x * Tw - Tu;
+			float3 l = pix.y * Tw - Tv;
+			float3 p = cross(k, l);
+			if (p.z == 0.0) continue;
 			float2 s = {p.x / p.z, p.y / p.z};
-			// 3d distance. Compute Mahalanobis distance in the canonical splat' space
 			float rho3d = (s.x * s.x + s.y * s.y); 
-			
-			// Add low pass filter according to Botsch et al. [2005], 
-			// see Eq. (11) from 2DGS paper. 
-			float2 xy = collected_xy[j];
 			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
-			// 2d screen distance
 			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); 
+
+			// compute intersection and depth
 			float rho = min(rho3d, rho2d);
-			
-			float depth = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z; // splat depth
-			if (depth < NEAR_PLANE) continue;
+			float depth = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z; 
+			if (depth < near_n) continue;
 			float4 nor_o = collected_normal_opacity[j];
 			float normal[3] = {nor_o.x, nor_o.y, nor_o.z};
+			float opa = nor_o.w;
+
 			float power = -0.5f * rho;
-			// power = -0.5f * 100.f * max(rho - 1, 0.0f);
 			if (power > 0.0f)
 				continue;
 
@@ -382,7 +366,7 @@ renderCUDA(
 			// Obtain alpha by multiplying with Gaussian opacity
 			// and its exponential falloff from mean.
 			// Avoid numerical instabilities (see paper appendix). 
-			float alpha = min(0.99f, nor_o.w * exp(power));
+			float alpha = min(0.99f, opa * exp(power));
 			if (alpha < 1.0f / 255.0f)
 				continue;
 			float test_T = T * (1 - alpha);
@@ -392,33 +376,29 @@ renderCUDA(
 				continue;
 			}
 
-
+			float w = alpha * T;
 #if RENDER_AXUTILITY
 			// Render depth distortion map
 			// Efficient implementation of distortion loss, see 2DGS' paper appendix.
 			float A = 1-T;
-			float mapped_depth = (FAR_PLANE * depth - FAR_PLANE * NEAR_PLANE) / ((FAR_PLANE - NEAR_PLANE) * depth);
-			float error = mapped_depth * mapped_depth * A + dist2 - 2 * mapped_depth * dist1;
-			distortion += error * alpha * T;
+			float m = far_n / (far_n - near_n) * (1 - near_n / depth);
+			distortion += (m * m * A + M2 - 2 * m * M1) * w;
+			D  += depth * w;
+			M1 += m * w;
+			M2 += m * m * w;
 
 			if (T > 0.5) {
 				median_depth = depth;
-				median_weight = alpha * T;
+				// median_weight = w;
 				median_contributor = contributor;
 			}
 			// Render normal map
-			for (int ch=0; ch<3; ch++) N[ch] += normal[ch] * alpha * T;
-
-			// Render depth map
-			D += depth * alpha * T;
-			// Efficient implementation of distortion loss, see 2DGS' paper appendix.
-			dist1 += mapped_depth * alpha * T;
-			dist2 += mapped_depth * mapped_depth * alpha * T;
+			for (int ch=0; ch<3; ch++) N[ch] += normal[ch] * w;
 #endif
 
 			// Eq. (3) from 3D Gaussian splatting paper.
 			for (int ch = 0; ch < CHANNELS; ch++)
-				C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
+				C[ch] += features[collected_id[j] * CHANNELS + ch] * w;
 			T = test_T;
 
 			// Keep track of last range entry to update this
@@ -438,14 +418,14 @@ renderCUDA(
 
 #if RENDER_AXUTILITY
 		n_contrib[pix_id + H * W] = median_contributor;
-		final_T[pix_id + H * W] = dist1;
-		final_T[pix_id + 2 * H * W] = dist2;
+		final_T[pix_id + H * W] = M1;
+		final_T[pix_id + 2 * H * W] = M2;
 		out_others[pix_id + DEPTH_OFFSET * H * W] = D;
 		out_others[pix_id + ALPHA_OFFSET * H * W] = 1 - T;
 		for (int ch=0; ch<3; ch++) out_others[pix_id + (NORMAL_OFFSET+ch) * H * W] = N[ch];
 		out_others[pix_id + MIDDEPTH_OFFSET * H * W] = median_depth;
 		out_others[pix_id + DISTORTION_OFFSET * H * W] = distortion;
-		out_others[pix_id + MEDIAN_WEIGHT_OFFSET * H * W] = median_weight;
+		// out_others[pix_id + MEDIAN_WEIGHT_OFFSET * H * W] = median_weight;
 #endif
 	}
 }
