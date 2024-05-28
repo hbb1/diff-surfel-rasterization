@@ -75,6 +75,7 @@ __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const 
 __device__ void compute_transmat(
 	const float3& p_orig,
 	const glm::vec2 scale,
+	float mod,
 	const glm::vec4 rot,
 	const float* projmatrix,
 	const float* viewmatrix,
@@ -85,7 +86,7 @@ __device__ void compute_transmat(
 ) {
 
 	glm::mat3 R = quat_to_rotmat(rot);
-	glm::mat3 S = scale_to_mat(scale, 1.0f);
+	glm::mat3 S = scale_to_mat(scale, mod);
 	glm::mat3 L = R * S;
 
 	// center of Gaussians in the camera coordinate
@@ -195,7 +196,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float3 normal;
 	if (transMat_precomp == nullptr)
 	{
-		compute_transmat(((float3*)orig_points)[idx], scales[idx], rotations[idx], projmatrix, viewmatrix, W, H, T, normal);
+		compute_transmat(((float3*)orig_points)[idx], scales[idx], scale_modifier, rotations[idx], projmatrix, viewmatrix, W, H, T, normal);
 		float3 *T_ptr = (float3*)transMats;
 		T_ptr[idx * 3 + 0] = {T[0][0], T[0][1], T[0][2]};
 		T_ptr[idx * 3 + 1] = {T[1][0], T[1][1], T[1][2]};
