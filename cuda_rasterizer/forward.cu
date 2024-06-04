@@ -218,7 +218,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 		float2 extent;
 		bool ok = compute_aabb(T, point_image, extent);
 		if (!ok) return;
-		radius = 3.0f * ceil(max(extent.x, extent.y));
+		radius = ceil(3.0f * max(extent.x, extent.y));
 	}
 
 	uint2 rect_min, rect_max;
