@@ -559,7 +559,9 @@ __device__ void compute_transmat_aabb(
 	glm::mat3x4 dL_dM = P * glm::transpose(dL_dT);
 	float3 dL_dtn = transformVec4x3Transpose(dL_dnormals[idx], viewmatrix);
 #if DUAL_VISIABLE
-	float multiplier = normal.z < 0 ? 1: -1;
+	float3 p_view = transformPoint4x3(p_orig, viewmatrix);
+	float cos = -sumf3(p_view * normal);
+	float multiplier = cos > 0 ? 1: -1;
 	dL_dtn = multiplier * dL_dtn;
 #endif
 	glm::mat3 dL_dRS = glm::mat3(

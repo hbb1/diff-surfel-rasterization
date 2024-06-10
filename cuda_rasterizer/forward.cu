@@ -112,10 +112,6 @@ __device__ void compute_transmat(
 	T = glm::transpose(splat2world) * world2ndc * ndc2pix;
 	normal = transformVec4x3({L[2].x, L[2].y, L[2].z}, viewmatrix);
 
-#if DUAL_VISIABLE
-	float multiplier = normal.z < 0 ? 1: -1;
-	normal = multiplier * normal;
-#endif
 }
 
 // Computing the bounding box of the 2D Gaussian and its center
@@ -210,6 +206,13 @@ __global__ void preprocessCUDA(int P, int D, int M,
 		);
 		normal = make_float3(0.0, 0.0, 1.0);
 	}
+
+#if DUAL_VISIABLE
+	float cos = -sumf3(p_view * normal);
+	if (cos == 0) return;
+	float multiplier = cos > 0 ? 1: -1;
+	normal = multiplier * normal;
+#endif
 
 	// Compute center and radius
 	float2 point_image;
