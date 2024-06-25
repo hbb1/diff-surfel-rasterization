@@ -68,8 +68,8 @@ namespace FORWARD
 		const float* bg_color,
 		float* out_color,
 		float* out_others,
-        float near_n , 
-        float far_n);
+	        float near_n , 
+	        float far_n);
 }
 
 
