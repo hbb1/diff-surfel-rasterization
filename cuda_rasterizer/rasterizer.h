@@ -88,8 +88,8 @@ namespace CudaRasterizer
 			float* dL_dscale,
 			float* dL_drot,
 			bool debug, 
-            float near_n ,
-            float far_n);
+			float near_n ,
+			float far_n);
 	};
 };
 
