@@ -716,8 +716,8 @@ void BACKWARD::render(
 	float* dL_dnormal3D,
 	float* dL_dopacity,
 	float* dL_dcolors,
-    float near_n , 
-    float far_n)
+    	float near_n , 
+    	float far_n)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> >(
 		ranges,
@@ -739,7 +739,7 @@ void BACKWARD::render(
 		dL_dnormal3D,
 		dL_dopacity,
 		dL_dcolors,
-        near_n , 
-        far_n
+        	near_n , 
+        	far_n
 		);
 }
