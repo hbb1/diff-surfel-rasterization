@@ -171,7 +171,9 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float4* normal_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
-	bool prefiltered)
+	bool prefiltered, 
+	float near_n , 
+	float far_n)
 {
 	auto idx = cg::this_grid().thread_rank();
 	if (idx >= P)
@@ -184,7 +186,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 
 	// Perform near culling, quit if outside.
 	float3 p_view;
-	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, prefiltered, p_view))
+	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, prefiltered, p_view, near_n, far_n))
 		return;
 	
 	// Compute transformation matrix
@@ -519,6 +521,8 @@ void FORWARD::preprocess(int P, int D, int M,
 		normal_opacity,
 		grid,
 		tiles_touched,
-		prefiltered
+		prefiltered,
+		near_n ,
+		far_n
 		);
 }
