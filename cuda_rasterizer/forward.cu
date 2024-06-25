@@ -266,8 +266,8 @@ renderCUDA(
 	const float* __restrict__ bg_color,
 	float* __restrict__ out_color,
 	float* __restrict__ out_others, 
-    float near_n , 
-    float far_n)
+    	float near_n , 
+    	float far_n)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
