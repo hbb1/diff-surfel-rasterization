@@ -454,8 +454,8 @@ void FORWARD::render(
 	const float* bg_color,
 	float* out_color,
 	float* out_others, 
-    float near_n , 
-    float far_n)
+    	float near_n , 
+    	float far_n)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
 		ranges,
@@ -472,8 +472,8 @@ void FORWARD::render(
 		bg_color,
 		out_color,
 		out_others,
-        near_n , 
-        far_n);
+        	near_n , 
+        	far_n);
 }
 
 void FORWARD::preprocess(int P, int D, int M,
@@ -501,8 +501,8 @@ void FORWARD::preprocess(int P, int D, int M,
 	const dim3 grid,
 	uint32_t* tiles_touched,
 	bool prefiltered,
-    float near_n ,
-    float far_n)
+    	float near_n ,
+    	float far_n)
 {
 	preprocessCUDA<NUM_CHANNELS> << <(P + 255) / 256, 256 >> > (
 		P, D, M,
