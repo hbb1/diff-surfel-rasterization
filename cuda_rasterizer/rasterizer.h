@@ -54,8 +54,8 @@ namespace CudaRasterizer
 			float* out_others,
 			int* radii = nullptr,
 			bool debug = false ,
-			float near_n, 
-			float far_n);
+			float near_n = 0.2, 
+			float far_n = 100.0);
 
 		static void backward(
 			const int P, int D, int M, int R,
@@ -87,7 +87,9 @@ namespace CudaRasterizer
 			float* dL_dsh,
 			float* dL_dscale,
 			float* dL_drot,
-			bool debug);
+			bool debug, 
+            float near_n ,
+            float far_n);
 	};
 };
 
