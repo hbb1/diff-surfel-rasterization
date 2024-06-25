@@ -41,8 +41,8 @@ namespace BACKWARD
 		float* dL_dnormal3D,
 		float* dL_dopacity,
 		float* dL_dcolors, 
-        float near_n , 
-        float far_n);
+        	float near_n , 
+        	float far_n);
 
 	void preprocess(
 		int P, int D, int M,
