@@ -278,7 +278,9 @@ int CudaRasterizer::Rasterizer::forward(
 		geomState.normal_opacity,
 		tile_grid,
 		geomState.tiles_touched,
-		prefiltered, near_n, far_n
+		prefiltered, 
+		near_n, 
+		far_n
 	), debug)
 
 	// Compute prefix sum over full list of touched tile counts by Gaussians
@@ -384,8 +386,8 @@ void CudaRasterizer::Rasterizer::backward(
 	float* dL_dscale,
 	float* dL_drot,
 	bool debug, 
-    float near_n ,
-    float far_n)
+    	float near_n ,
+    	float far_n)
 {
 	GeometryState geomState = GeometryState::fromChunk(geom_buffer, P);
 	BinningState binningState = BinningState::fromChunk(binning_buffer, R);
@@ -430,8 +432,8 @@ void CudaRasterizer::Rasterizer::backward(
 		dL_dnormal,
 		dL_dopacity,
 		dL_dcolor, 
-        near_n, 
-        far_n), debug)
+        	near_n, 
+        	far_n), debug)
 
 	// Take care of the rest of preprocessing. Was the precomputed covariance
 	// given to us or a scales/rot pair? If precomputed, pass that. If not,
