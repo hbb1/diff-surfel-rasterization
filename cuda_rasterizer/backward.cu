@@ -162,8 +162,8 @@ renderCUDA(
 	float* __restrict__ dL_dnormal3D,
 	float* __restrict__ dL_dopacity,
 	float* __restrict__ dL_dcolors,
-    float near_n, 
-    float far_n)
+    	float near_n, 
+    	float far_n)
 {
 	// We rasterize again. Compute necessary block info.
 	auto block = cg::this_thread_block();
