@@ -347,8 +347,8 @@ int CudaRasterizer::Rasterizer::forward(
 		background,
 		out_color,
 		out_others,
-        near_n ,
-        far_n), debug)
+	        near_n ,
+	        far_n), debug)
 
 	return num_rendered;
 }
