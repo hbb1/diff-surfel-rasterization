@@ -130,7 +130,9 @@ RasterizeGaussiansCUDA(
 		out_color.contiguous().data<float>(),
 		out_others.contiguous().data<float>(),
 		radii.contiguous().data<int>(),
-		debug, near_n , far_n);
+		debug, 
+		near_n , 
+		far_n);
   }
   return std::make_tuple(rendered, out_color, out_others, radii, geomBuffer, binningBuffer, imgBuffer);
 }
@@ -159,8 +161,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	const torch::Tensor& binningBuffer,
 	const torch::Tensor& imageBuffer,
 	const bool debug,
-    float near_n , 
-    float far_n) 
+    	float near_n , 
+    	float far_n) 
 {
 
   CHECK_INPUT(background);
@@ -230,7 +232,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	  dL_dsh.contiguous().data<float>(),
 	  dL_dscales.contiguous().data<float>(),
 	  dL_drotations.contiguous().data<float>(),
-	  debug, near_n , far_n);
+	  debug, 
+	  near_n ,
+	  far_n);
   }
 
   return std::make_tuple(dL_dmeans2D, dL_dcolors, dL_dopacity, dL_dmeans3D, dL_dtransMat, dL_dsh, dL_dscales, dL_drotations);
@@ -254,7 +258,8 @@ torch::Tensor markVisible(
 		viewmatrix.contiguous().data<float>(),
 		projmatrix.contiguous().data<float>(),
 		present.contiguous().data<bool>(),
-		near_n , far_n);
+		near_n , 
+		far_n);
   }
   
   return present;
