@@ -118,6 +118,7 @@ __device__ void compute_transmat(
 // The center of the bounding box is used to create a low pass filter
 __device__ bool compute_aabb(
 	glm::mat3 T, 
+	float cutoff, 
 	float2& point_image,
 	float2 & extent
 ) {
@@ -126,7 +127,7 @@ __device__ bool compute_aabb(
 	float3 T3 = {T[2][0], T[2][1], T[2][2]};
 
 	// Compute AABB
-	float3 temp_point = {1.0f, 1.0f, -1.0f};
+	float3 temp_point = {cutoff * cutoff, cutoff * cutoff, -1.0f};
 	float distance = sumf3(T3 * T3 * temp_point);
 	float3 f = (1 / distance) * temp_point;
 	if (distance == 0.0) return false;
@@ -214,14 +215,21 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	normal = multiplier * normal;
 #endif
 
+#if TIGHTBBOX // no use in the paper, but it indeed help speeds.
+	// the effective extent is now depended on the opacity of gaussian.
+	float cutoff = sqrtf(max(9.f + 2.f * logf(opacities[idx]), 0.000001));
+#else
+	float cutoff = 3.0f;
+#endif
+
 	// Compute center and radius
 	float2 point_image;
 	float radius;
 	{
 		float2 extent;
-		bool ok = compute_aabb(T, point_image, extent);
+		bool ok = compute_aabb(T, cutoff, point_image, extent);
 		if (!ok) return;
-		radius = ceil(3.0f * max(extent.x, extent.y));
+		radius = ceil(max(extent.x, extent.y));
 	}
 
 	uint2 rect_min, rect_max;
