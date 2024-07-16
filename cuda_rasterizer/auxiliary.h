@@ -20,11 +20,14 @@
 
 #define TIGHTBBOX 0
 #define RENDER_AXUTILITY 1
+#define ONE_SURFACE 1
 #define DEPTH_OFFSET 0
 #define ALPHA_OFFSET 1
 #define NORMAL_OFFSET 2 
 #define MIDDEPTH_OFFSET 5
 #define DISTORTION_OFFSET 6
+#define VARN_OFFSET 7
+#define ERROR_OFFSET 8
 // #define MEDIAN_WEIGHT_OFFSET 7
 
 // distortion helper macros

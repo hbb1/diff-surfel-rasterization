@@ -290,6 +290,7 @@ renderCUDA(
 
 	// Initialize helper variables
 	float T = 1.0f;
+	float oT = 1.0f;
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
 	float C[CHANNELS] = { 0 };
@@ -298,6 +299,10 @@ renderCUDA(
 #if RENDER_AXUTILITY
 	// render axutility ouput
 	float N[3] = {0};
+	float oN[3] = {0};
+	float VarN = 0;
+	float VarNMax = 0;
+	float O = 0;
 	float D = { 0 };
 	float M1 = {0};
 	float M2 = {0};
@@ -305,6 +310,8 @@ renderCUDA(
 	float median_depth = {0};
 	// float median_weight = {0};
 	float median_contributor = {-1};
+	float Total_num = 0;
+	float flag = false;
 
 #endif
 
@@ -370,40 +377,72 @@ renderCUDA(
 			if (alpha < 1.0f / 255.0f)
 				continue;
 			float test_T = T * (1 - alpha);
-			if (test_T < 0.0001f)
+
+			if ((test_T < 0.0001f))
 			{
+			#if ONE_SURFACE
 				done = true;
 				continue;
+			#endif
+				if (!flag){
+					oT = T;
+					for (int ch=0; ch<3; ch++) {
+						oN[ch] = N[ch];
+						N[ch] = 0;
+					}
+				}
+				T = 1.0f;
+			
+				#if RENDER_AXUTILITY
+					// render axutility ouput
+				VarNMax = max(VarNMax, VarN);
+				VarN = 0;
+				O = 0;
+				#endif
+				flag = true;
 			}
+
 
 			float w = alpha * T;
 #if RENDER_AXUTILITY
 			// Render depth distortion map
 			// Efficient implementation of distortion loss, see 2DGS' paper appendix.
 			float A = 1-T;
-			float m = far_n / (far_n - near_n) * (1 - near_n / depth);
-			distortion += (m * m * A + M2 - 2 * m * M1) * w;
-			D  += depth * w;
-			M1 += m * w;
-			M2 += m * m * w;
-
-			if (T > 0.5) {
-				median_depth = depth;
-				// median_weight = w;
-				median_contributor = contributor;
+			if (!flag){
+				float m = far_n / (far_n - near_n) * (1 - near_n / depth);
+				distortion += (m * m * A + M2 - 2 * m * M1) * w;
+				D  += depth * w;
+				M1 += m * w;
+				M2 += m * m * w;
+				if (T > 0.5) {
+					median_depth = depth;
+					// median_weight = w;
+					median_contributor = contributor;
+				}
 			}
+			
+			float dot = 0;
 			// Render normal map
-			for (int ch=0; ch<3; ch++) N[ch] += normal[ch] * w;
+			for (int ch=0; ch<3; ch++) {
+				dot += N[ch] * normal[ch];
+				N[ch] += normal[ch] * w;
+			}
+			VarN += (O - dot)*w;
+			O += w;
+			
 #endif
 
 			// Eq. (3) from 3D Gaussian splatting paper.
-			for (int ch = 0; ch < CHANNELS; ch++)
+			if (!flag){
+				for (int ch = 0; ch < CHANNELS; ch++)
 				C[ch] += features[collected_id[j] * CHANNELS + ch] * w;
-			T = test_T;
+				// Keep track of last range entry to update this
+				// pixel.
+				last_contributor = contributor;
+			}
 
-			// Keep track of last range entry to update this
-			// pixel.
-			last_contributor = contributor;
+			T = test_T;
+			
 		}
 	}
 
@@ -411,20 +450,23 @@ renderCUDA(
 	// rendering data to the frame and auxiliary buffers.
 	if (inside)
 	{
-		final_T[pix_id] = T;
+		final_T[pix_id] = flag? oT: T;
 		n_contrib[pix_id] = last_contributor;
 		for (int ch = 0; ch < CHANNELS; ch++)
-			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
+			out_color[ch * H * W + pix_id] = C[ch];
+
 
 #if RENDER_AXUTILITY
 		n_contrib[pix_id + H * W] = median_contributor;
 		final_T[pix_id + H * W] = M1;
 		final_T[pix_id + 2 * H * W] = M2;
 		out_others[pix_id + DEPTH_OFFSET * H * W] = D;
-		out_others[pix_id + ALPHA_OFFSET * H * W] = 1 - T;
-		for (int ch=0; ch<3; ch++) out_others[pix_id + (NORMAL_OFFSET+ch) * H * W] = N[ch];
+		out_others[pix_id + ALPHA_OFFSET * H * W] = flag? 1 - oT: 1 - T;
+		for (int ch=0; ch<3; ch++) out_others[pix_id + (NORMAL_OFFSET+ch) * H * W] = flag? oN[ch]:N[ch];
 		out_others[pix_id + MIDDEPTH_OFFSET * H * W] = median_depth;
 		out_others[pix_id + DISTORTION_OFFSET * H * W] = distortion;
+		// out_others[pix_id + VARN_OFFSET * H * W] = VarN;
+		out_others[pix_id + VARN_OFFSET * H * W] = max(VarNMax, VarN);
 		// out_others[pix_id + MEDIAN_WEIGHT_OFFSET * H * W] = median_weight;
 #endif
 	}
