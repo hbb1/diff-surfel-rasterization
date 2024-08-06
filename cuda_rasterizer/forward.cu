@@ -118,31 +118,29 @@ __device__ void compute_transmat(
 // The center of the bounding box is used to create a low pass filter
 __device__ bool compute_aabb(
 	glm::mat3 T, 
-	float cutoff, 
+	float cutoff,
 	float2& point_image,
-	float2 & extent
+	float2& extent
 ) {
-	float3 T0 = {T[0][0], T[0][1], T[0][2]};
-	float3 T1 = {T[1][0], T[1][1], T[1][2]};
-	float3 T3 = {T[2][0], T[2][1], T[2][2]};
+	glm::vec3 t = glm::vec3(cutoff * cutoff, cutoff * cutoff, -1.0f);
+	float d = glm::dot(t, T[2] * T[2]);
+	if (d == 0.0) return false;
+	glm::vec3 f = (1 / d) * t;
 
-	// Compute AABB
-	float3 temp_point = {cutoff * cutoff, cutoff * cutoff, -1.0f};
-	float distance = sumf3(T3 * T3 * temp_point);
-	float3 f = (1 / distance) * temp_point;
-	if (distance == 0.0) return false;
+	glm::vec2 p = glm::vec2(
+		glm::dot(f, T[0] * T[2]),
+		glm::dot(f, T[1] * T[2])
+	);
 
-	point_image = {
-		sumf3(f * T0 * T3),
-		sumf3(f * T1 * T3)
-	};  
-	
-	float2 temp = {
-		sumf3(f * T0 * T0),
-		sumf3(f * T1 * T1)
-	};
-	float2 half_extend = point_image * point_image - temp;
-	extent = sqrtf2(maxf2(1e-4, half_extend));
+	glm::vec2 h0 = p * p - 
+		glm::vec2(
+			glm::dot(f, T[0] * T[0]),
+			glm::dot(f, T[1] * T[1])
+		);
+
+	glm::vec2 h = sqrt(max(glm::vec2(1e-4, 1e-4), h0));
+	point_image = {p.x, p.y};
+	extent = {h.x, h.y};
 	return true;
 }
 
