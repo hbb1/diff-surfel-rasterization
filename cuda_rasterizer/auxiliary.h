@@ -36,6 +36,7 @@
 
 __device__ const float near_n = 0.2;
 __device__ const float far_n = 100.0;
+__device__ const float FilterSize = 0.707106; // sqrt(2) / 2
 __device__ const float FilterInvSquare = 2.0f;
 
 // Spherical harmonics coefficients
