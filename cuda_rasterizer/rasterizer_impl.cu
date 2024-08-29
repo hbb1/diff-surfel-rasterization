@@ -213,15 +213,15 @@ int CudaRasterizer::Rasterizer::forward(
 	const float* viewmatrix,
 	const float* projmatrix,
 	const float* cam_pos,
-	const float tan_fovx, float tan_fovy,
+	const float* intrinsic,
 	const bool prefiltered,
 	float* out_color,
 	float* out_others,
 	int* radii,
 	bool debug)
 {
-	const float focal_y = height / (2.0f * tan_fovy);
-	const float focal_x = width / (2.0f * tan_fovx);
+	// const float focal_y = height / (2.0f * tan_fovy);
+	// const float focal_x = width / (2.0f * tan_fovx);
 
 	size_t chunk_size = required<GeometryState>(P);
 	char* chunkptr = geometryBuffer(chunk_size);
@@ -260,8 +260,7 @@ int CudaRasterizer::Rasterizer::forward(
 		viewmatrix, projmatrix,
 		(glm::vec3*)cam_pos,
 		width, height,
-		focal_x, focal_y,
-		tan_fovx, tan_fovy,
+		intrinsic,
 		radii,
 		geomState.means2D,
 		geomState.depths,
@@ -326,7 +325,7 @@ int CudaRasterizer::Rasterizer::forward(
 		imgState.ranges,
 		binningState.point_list,
 		width, height,
-		focal_x, focal_y,
+		intrinsic,
 		geomState.means2D,
 		feature_ptr,
 		transMat_ptr,
@@ -357,7 +356,7 @@ void CudaRasterizer::Rasterizer::backward(
 	const float* viewmatrix,
 	const float* projmatrix,
 	const float* campos,
-	const float tan_fovx, float tan_fovy,
+	const float* intrinsic,
 	const int* radii,
 	char* geom_buffer,
 	char* binning_buffer,
@@ -384,8 +383,8 @@ void CudaRasterizer::Rasterizer::backward(
 		radii = geomState.internal_radii;
 	}
 
-	const float focal_y = height / (2.0f * tan_fovy);
-	const float focal_x = width / (2.0f * tan_fovx);
+	// const float focal_y = height / (2.0f * tan_fovy);
+	// const float focal_x = width / (2.0f * tan_fovx);
 
 	const dim3 tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, 1);
 	const dim3 block(BLOCK_X, BLOCK_Y, 1);
@@ -402,7 +401,7 @@ void CudaRasterizer::Rasterizer::backward(
 		imgState.ranges,
 		binningState.point_list,
 		width, height,
-		focal_x, focal_y,
+		intrinsic,
 		background,
 		geomState.means2D,
 		geomState.normal_opacity,
@@ -434,8 +433,8 @@ void CudaRasterizer::Rasterizer::backward(
 		transMat_ptr,
 		viewmatrix,
 		projmatrix,
-		focal_x, focal_y,
-		tan_fovx, tan_fovy,
+		intrinsic,
+		width, height,
 		(glm::vec3*)campos,
 		(float3*)dL_dmean2D, // gradient inputs
 		dL_dnormal,		     // gradient inputs

@@ -12,7 +12,11 @@
 from typing import NamedTuple
 import torch.nn as nn
 import torch
+import ctypes
+import os
 from . import _C
+# from . import libCudaRasterizer as _C
+#_C = ctypes.CDLL(os.path.join(os.path.dirname(__file__), 'libCudaRasterizer.so'))
 
 def cpu_deep_copy_tuple(input_tuple):
     copied_tensors = [item.cpu().clone() if isinstance(item, torch.Tensor) else item for item in input_tuple]
@@ -68,8 +72,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             cov3Ds_precomp,
             raster_settings.viewmatrix,
             raster_settings.projmatrix,
-            raster_settings.tanfovx,
-            raster_settings.tanfovy,
+            raster_settings.intrinsic,
             raster_settings.image_height,
             raster_settings.image_width,
             sh,
@@ -116,8 +119,7 @@ class _RasterizeGaussians(torch.autograd.Function):
                 cov3Ds_precomp, 
                 raster_settings.viewmatrix, 
                 raster_settings.projmatrix, 
-                raster_settings.tanfovx, 
-                raster_settings.tanfovy, 
+                raster_settings.intrinsic,
                 grad_out_color,
                 grad_depth,
                 sh, 
@@ -158,8 +160,7 @@ class _RasterizeGaussians(torch.autograd.Function):
 class GaussianRasterizationSettings(NamedTuple):
     image_height: int
     image_width: int 
-    tanfovx : float
-    tanfovy : float
+    intrinsic : torch.Tensor
     bg : torch.Tensor
     scale_modifier : float
     viewmatrix : torch.Tensor

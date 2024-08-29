@@ -48,8 +48,7 @@ RasterizeGaussiansCUDA(
 	const torch::Tensor& transMat_precomp,
 	const torch::Tensor& viewmatrix,
 	const torch::Tensor& projmatrix,
-	const float tan_fovx, 
-	const float tan_fovy,
+	const torch::Tensor& intrinsic,
 	const int image_height,
 	const int image_width,
 	const torch::Tensor& sh,
@@ -76,6 +75,7 @@ RasterizeGaussiansCUDA(
   CHECK_INPUT(transMat_precomp);
   CHECK_INPUT(viewmatrix);
   CHECK_INPUT(projmatrix);
+  CHECK_INPUT(intrinsic);
   CHECK_INPUT(sh);
   CHECK_INPUT(campos);
 
@@ -122,8 +122,7 @@ RasterizeGaussiansCUDA(
 		viewmatrix.contiguous().data<float>(), 
 		projmatrix.contiguous().data<float>(),
 		campos.contiguous().data<float>(),
-		tan_fovx,
-		tan_fovy,
+		intrinsic.contiguous().data<float>(),
 		prefiltered,
 		out_color.contiguous().data<float>(),
 		out_others.contiguous().data<float>(),
@@ -145,8 +144,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	const torch::Tensor& transMat_precomp,
 	const torch::Tensor& viewmatrix,
 	const torch::Tensor& projmatrix,
-	const float tan_fovx,
-	const float tan_fovy,
+	const torch::Tensor& intrinsic,
 	const torch::Tensor& dL_dout_color,
 	const torch::Tensor& dL_dout_others,
 	const torch::Tensor& sh,
@@ -168,6 +166,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
   CHECK_INPUT(transMat_precomp);
   CHECK_INPUT(viewmatrix);
   CHECK_INPUT(projmatrix);
+  CHECK_INPUT(intrinsic);
   CHECK_INPUT(sh);
   CHECK_INPUT(campos);
   CHECK_INPUT(binningBuffer);
@@ -209,8 +208,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	  viewmatrix.contiguous().data<float>(),
 	  projmatrix.contiguous().data<float>(),
 	  campos.contiguous().data<float>(),
-	  tan_fovx,
-	  tan_fovy,
+	  intrinsic.contiguous().data<float>(),
 	  radii.contiguous().data<int>(),
 	  reinterpret_cast<char*>(geomBuffer.contiguous().data_ptr()),
 	  reinterpret_cast<char*>(binningBuffer.contiguous().data_ptr()),

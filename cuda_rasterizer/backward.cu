@@ -146,7 +146,7 @@ renderCUDA(
 	const uint2* __restrict__ ranges,
 	const uint32_t* __restrict__ point_list,
 	int W, int H,
-	float focal_x, float focal_y,
+	const float* __restrict__ intrinsic,
 	const float* __restrict__ bg_color,
 	const float2* __restrict__ points_xy_image,
 	const float4* __restrict__ normal_opacity,
@@ -596,10 +596,8 @@ __global__ void preprocessCUDA(
 	const float scale_modifier,
 	const float* viewmatrix,
 	const float* projmatrix,
-	const float focal_x, 
-	const float focal_y,
-	const float tan_fovx,
-	const float tan_fovy,
+	const float* intrinsic,
+	const int W, const int H,
 	const glm::vec3* campos, 
 	// grad input
 	float* dL_dtransMats,
@@ -615,8 +613,6 @@ __global__ void preprocessCUDA(
 	if (idx >= P || !(radii[idx] > 0))
 		return;
 
-	const int W = int(focal_x * tan_fovx * 2);
-	const int H = int(focal_y * tan_fovy * 2);
 	const float * Ts_precomp = (scales) ? nullptr : transMats;
 	compute_transmat_aabb(
 		idx, 
@@ -653,8 +649,8 @@ void BACKWARD::preprocess(
 	const float* transMats,
 	const float* viewmatrix,
 	const float* projmatrix,
-	const float focal_x, const float focal_y,
-	const float tan_fovx, const float tan_fovy,
+	const float* intrinsic,
+	const int W, const int H,
 	const glm::vec3* campos, 
 	float3* dL_dmean2Ds,
 	const float* dL_dnormal3Ds,
@@ -677,10 +673,8 @@ void BACKWARD::preprocess(
 		scale_modifier,
 		viewmatrix,
 		projmatrix,
-		focal_x, 
-		focal_y,
-		tan_fovx,
-		tan_fovy,
+		intrinsic,
+		W, H,
 		campos,	
 		dL_dtransMats,
 		dL_dnormal3Ds,
@@ -698,7 +692,7 @@ void BACKWARD::render(
 	const uint2* ranges,
 	const uint32_t* point_list,
 	int W, int H,
-	float focal_x, float focal_y,
+	const float* intrinsic,
 	const float* bg_color,
 	const float2* means2D,
 	const float4* normal_opacity,
@@ -719,7 +713,7 @@ void BACKWARD::render(
 		ranges,
 		point_list,
 		W, H,
-		focal_x, focal_y,
+		intrinsic,
 		bg_color,
 		means2D,
 		normal_opacity,
