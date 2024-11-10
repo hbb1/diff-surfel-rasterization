@@ -351,19 +351,26 @@ renderCUDA(
 			const float3 Tu = collected_Tu[j];
 			const float3 Tv = collected_Tv[j];
 			const float3 Tw = collected_Tw[j];
+			// Transform the two planes into local u-v system. 
 			float3 k = pix.x * Tw - Tu;
 			float3 l = pix.y * Tw - Tv;
+			// Cross product of two planes is a line, Eq. (9)
 			float3 p = cross(k, l);
 			if (p.z == 0.0) continue;
+			// Perspective division to get the intersection (u,v), Eq. (10)
 			float2 s = {p.x / p.z, p.y / p.z};
 			float rho3d = (s.x * s.x + s.y * s.y); 
+			// Add low pass filter
 			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
 			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); 
-
-			// compute intersection and depth
 			float rho = min(rho3d, rho2d);
-			float depth = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z; 
+
+			// compute depth
+			float depth = (s.x * Tw.x + s.y * Tw.y) + Tw.z;
+			// if a point is too small, its depth is not reliable?
+			// depth = (rho3d <= rho2d) ? depth : Tw.z 
 			if (depth < near_n) continue;
+
 			float4 nor_o = collected_normal_opacity[j];
 			float normal[3] = {nor_o.x, nor_o.y, nor_o.z};
 			float opa = nor_o.w;

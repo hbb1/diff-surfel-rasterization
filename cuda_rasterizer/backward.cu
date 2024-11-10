@@ -293,11 +293,14 @@ renderCUDA(
 			float rho3d = (s.x * s.x + s.y * s.y); 
 			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
 			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); 
-
-			// compute intersection and depth
 			float rho = min(rho3d, rho2d);
-			float c_d = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z; 
+
+			// compute depth
+			float c_d = (s.x * Tw.x + s.y * Tw.y) + Tw.z; // Tw * [u,v,1]
+			// if a point is too small, its depth is not reliable?
+			// c_d = (rho3d <= rho2d) ? c_d : Tw.z; 
 			if (c_d < near_n) continue;
+			
 			float4 nor_o = collected_normal_opacity[j];
 			float normal[3] = {nor_o.x, nor_o.y, nor_o.z};
 			float opa = nor_o.w;
@@ -430,7 +433,10 @@ renderCUDA(
 				const float dG_ddely = -G * FilterInvSquare * d.y;
 				atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx); // not scaled
 				atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely); // not scaled
-				atomicAdd(&dL_dtransMat[global_id * 9 + 8],  dL_dz); // propagate depth loss
+				// // Propagate the gradients of depth
+				atomicAdd(&dL_dtransMat[global_id * 9 + 6],  s.x * dL_dz);
+				atomicAdd(&dL_dtransMat[global_id * 9 + 7],  s.y * dL_dz);
+				atomicAdd(&dL_dtransMat[global_id * 9 + 8],  dL_dz);
 			}
 
 			// Update gradients w.r.t. opacity of the Gaussian
